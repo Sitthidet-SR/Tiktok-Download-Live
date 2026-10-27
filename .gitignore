@@ -1,0 +1,8 @@
+# Secrets: never commit these
+cookies.txt
+*.cookies.txt
+config.json
+
+recordings/
+__pycache__/
+*.pyc

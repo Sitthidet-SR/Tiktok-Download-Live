@@ -1,0 +1,121 @@
+"""TikTok web endpoints: room ID, live status and stream URLs.
+
+These are the unofficial endpoints the TikTok website itself uses. They can
+change at any time; if something breaks, compare with yt-dlp's tiktok:live
+extractor.
+"""
+
+import json
+import logging
+import re
+from dataclasses import dataclass
+from urllib.parse import quote
+
+from .http_client import TikTokError
+
+log = logging.getLogger(__name__)
+
+LIVE_STATUS = 2  # liveRoom.status / room status: 2 = live, 4 = ended
+
+
+@dataclass
+class RoomStatus:
+    username: str
+    room_id: str
+    is_live: bool
+
+
+class TikTokApi:
+    def __init__(self, http):
+        self.http = http
+
+    def account_name(self):
+        """Return the logged-in username, or None if the cookies are not logged in."""
+        data = self.http.get_json("https://www.tiktok.com/passport/web/account/info/?aid=1459")
+        info = data.get("data") or {}
+        return info.get("username") or info.get("screen_name") or None
+
+    def room_status(self, username):
+        """Look up a user's current room ID and whether they are live."""
+        url = ("https://www.tiktok.com/api-live/user/room/?aid=1988&sourceType=54&uniqueId="
+               + quote(username))
+        try:
+            data = self.http.get_json(url, referer=f"https://www.tiktok.com/@{quote(username)}/live")
+            d = data.get("data") or {}
+            room_id = str((d.get("user") or {}).get("roomId") or "")
+            status = (d.get("liveRoom") or {}).get("status")
+            if data.get("statusCode") not in (0, None) and not room_id:
+                raise TikTokError(f"api-live error {data.get('statusCode')}: {data.get('message', '')}")
+            return RoomStatus(username, room_id, bool(room_id) and status == LIVE_STATUS)
+        except TikTokError as e:
+            if "expected JSON" not in str(e):
+                raise
+            log.debug("api-live/user/room returned non-JSON for %s, trying the live page", username)
+        return self._room_status_from_page(username)
+
+    def _room_status_from_page(self, username):
+        html, _ = self.http.get(f"https://www.tiktok.com/@{quote(username)}/live")
+        m = re.search(r'"roomId"\s*:\s*"(\d+)"', html)
+        room_id = m.group(1) if m else ""
+        m = re.search(r'"status"\s*:\s*(\d+)', html[html.find('"liveRoom"'):] if '"liveRoom"' in html else "")
+        is_live = bool(room_id) and m is not None and int(m.group(1)) == LIVE_STATUS
+        return RoomStatus(username, room_id, is_live)
+
+    def check_alive(self, room_ids):
+        """Check several rooms in one request. Returns {room_id: bool}."""
+        if not room_ids:
+            return {}
+        url = ("https://webcast.tiktok.com/webcast/room/check_alive/?aid=1988&region=CH"
+               "&room_ids=" + ",".join(room_ids) + "&user_is_login=true")
+        data = self.http.get_json(url)
+        out = {}
+        for item in data.get("data") or []:
+            rid = str(item.get("room_id_str") or item.get("room_id") or "")
+            out[rid] = bool(item.get("alive"))
+        return out
+
+    def stream_url(self, room_id, preference):
+        """Return (url, quality_name) for the best available FLV stream, else HLS."""
+        data = self.http.get_json(
+            f"https://webcast.tiktok.com/webcast/room/info/?aid=1988&room_id={room_id}")
+        room = data.get("data") or {}
+        if room.get("status") not in (None, LIVE_STATUS):
+            raise TikTokError(f"room {room_id} is not live (status {room.get('status')})")
+        candidates = extract_stream_urls(room)
+        if not candidates:
+            raise TikTokError("live room has no stream URL (age/region restricted, or the API changed)")
+        for q in preference:
+            if q in candidates:
+                return candidates[q], q
+        q = next(iter(candidates))
+        return candidates[q], q
+
+
+def extract_stream_urls(room):
+    """Collect {quality: url} from a room/info payload. FLV first, HLS as fallback."""
+    found = {}
+    stream = room.get("stream_url") or {}
+
+    sdk = ((stream.get("live_core_sdk_data") or {}).get("pull_data") or {}).get("stream_data")
+    if isinstance(sdk, str) and sdk:
+        try:
+            sdk = json.loads(sdk)
+        except ValueError:
+            sdk = None
+    if isinstance(sdk, dict):
+        for name, entry in (sdk.get("data") or {}).items():
+            main = (entry or {}).get("main") or {}
+            if main.get("flv"):
+                found.setdefault(name, main["flv"])
+
+    for name, url in (stream.get("flv_pull_url") or {}).items():
+        if url:
+            found.setdefault(name, url)
+
+    hls = stream.get("hls_pull_url")
+    if hls:
+        found.setdefault("hls", hls)
+    for name, url in (stream.get("hls_pull_url_map") or {}).items():
+        if url:
+            found.setdefault(f"hls_{name}", url)
+    return found
