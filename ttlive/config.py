@@ -28,7 +28,11 @@ class Config:
     # newer stream data, FULL_HD1/HD1/SD1/SD2 from the older list. "ao" (audio only) is never picked.
     stream_preference: list = field(default_factory=lambda: [
         "origin", "uhd", "FULL_HD1", "hd", "HD1", "sd", "SD1", "ld", "SD2"])
-    reconnect_delays: list = field(default_factory=lambda: [5, 10, 20, 40, 80])
+    # After the stream drops, keep the same clip if the channel is live again within
+    # this many minutes (even as a brand new live); after that it becomes a new clip
+    rejoin_minutes: float = 8
+    # Wait between checks while waiting for the live to come back (seconds, capped at 30)
+    reconnect_delays: list = field(default_factory=lambda: [5, 10, 20, 30])
     merge_on_end: bool = True
     delete_segments_after_merge: bool = False
     captcha_pause_minutes: int = 30
@@ -68,6 +72,8 @@ def load_config(path, allow_empty=False):
         raise ValueError("check_interval_min must be at least 30 seconds (the plan recommends 60-180)")
     if cfg.check_interval_max < cfg.check_interval_min:
         raise ValueError("check_interval_max must be >= check_interval_min")
+    if cfg.rejoin_minutes < 0 or cfg.rejoin_minutes > 120:
+        raise ValueError("rejoin_minutes must be between 0 and 120")
     if cfg.stats_interval < 30:
         raise ValueError("stats_interval must be at least 30 seconds")
     if cfg.min_request_gap < 1:

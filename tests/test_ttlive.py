@@ -227,25 +227,30 @@ class RecordAndMergeTests(Base):
                        check=True)
         return path
 
-    def test_record_reconnect_then_merge(self):
+    def run_recorder(self, live_answers, rejoin_minutes=0.05):
+        """Record from a local FLV. live_answers = what room_status says on each re-check."""
         flv = self.make_flv()
         handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=self.tmp)
         handler.log_message = lambda *a: None
         srv, base = serve(handler)
+        from ttlive.tiktok_api import RoomStatus
 
         class FakeApi:
-            calls = 0
-            alive = [True, False]  # dropped once while still live, then ended
+            streams = 0
+            answers = list(live_answers)
 
             def stream_url(self, room_id, pref):
-                FakeApi.calls += 1
+                FakeApi.streams += 1
                 return base + "/live.flv", "origin"
+
+            def room_status(self, user):
+                live = FakeApi.answers.pop(0) if FakeApi.answers else False
+                return RoomStatus(user, "2" if live else "", live)
 
             def room_stats(self, room_id):
                 return {"viewers": 120, "likes": 3400, "total_viewers": 900}
 
-            def check_alive(self, ids):
-                return {ids[0]: FakeApi.alive.pop(0)}
+        tmp = self.tmp
 
         class Cfg:
             user_agent = "ua"
@@ -253,13 +258,14 @@ class RecordAndMergeTests(Base):
             segment_seconds = 2
             stream_preference = ["origin"]
             stats_interval = 30
-            reconnect_delays = [0, 0]
+            reconnect_delays = [0.2]
             merge_on_end = True
             delete_segments_after_merge = True
-            output_dir = os.path.join(self.tmp, "rec")
+            output_dir = os.path.join(tmp, "rec")
 
             def path(self, p):
                 return p
+        Cfg.rejoin_minutes = rejoin_minutes
 
         sent = []
 
@@ -274,15 +280,30 @@ class RecordAndMergeTests(Base):
         finally:
             srv.shutdown()
         self.assertFalse(r.is_alive())
-        self.assertEqual(FakeApi.calls, 2)  # reconnected once
+        return r, FakeApi, sent
+
+    def duration(self, path):
+        return float(subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+            capture_output=True, text=True).stdout)
+
+    def test_drop_then_back_within_window_is_one_clip(self):
+        # live again after the first drop (new room ID), then gone for good
+        r, api, sent = self.run_recorder([True])
+        self.assertEqual(api.streams, 2)
+        self.assertEqual(r.room_id, "2")  # followed the restarted live's new room
         mp4 = r.session_dir + ".mp4"
         self.assertTrue(os.path.exists(mp4), sent)
-        self.assertFalse(os.path.exists(r.session_dir))  # segments deleted after merge
-        dur = float(subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", mp4],
-            capture_output=True, text=True).stdout)
-        self.assertGreater(dur, 6)  # two 4s recordings joined
-        self.assertTrue(any("ไลฟ์จบ" in s for s in sent))
+        self.assertFalse(os.path.exists(r.session_dir))  # segments deleted after a verified merge
+        self.assertGreater(self.duration(mp4), 6)  # both 4s recordings in one file
+        self.assertTrue(any("ไลฟ์จบ" in s and "คนดูสูงสุด 120" in s for s in sent), sent)
+
+    def test_not_back_within_window_ends_clip(self):
+        start = time.time()
+        r, api, sent = self.run_recorder([False, False, False], rejoin_minutes=0.03)
+        self.assertEqual(api.streams, 1)
+        self.assertLess(time.time() - start, 20)  # gave up after ~2s of waiting
+        self.assertGreater(self.duration(r.session_dir + ".mp4"), 3)
 
     def test_merge_nothing(self):
         d = os.path.join(self.tmp, "empty")

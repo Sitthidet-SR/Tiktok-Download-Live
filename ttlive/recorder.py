@@ -40,6 +40,7 @@ class Recorder(threading.Thread):
         self.quality = ""
         self.phase = "starting"  # starting, recording, reconnecting, merging
         self.output = None  # final .mp4 once merged
+        self.wait_until = None  # while waiting for a dropped live to come back
         self.stats = {}  # viewers, likes, total_viewers, peak_viewers, updated
         stamp = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = os.path.join(cfg.path(cfg.output_dir), username, f"{username}_{stamp}")
@@ -119,47 +120,74 @@ class Recorder(threading.Thread):
         return total
 
     def _record_loop(self):
-        delays = self.cfg.reconnect_delays
-        attempt = 0
+        """Record until the live is gone for longer than rejoin_minutes.
+
+        A drop, or the streamer ending and starting a new live, within that
+        window keeps writing into this session, so it all merges into one clip."""
+        grace = self.cfg.rejoin_minutes * 60
+        drop_since = None
+        tries = 0
         while not self._stop_event.is_set():
             started = time.time()
             try:
                 url, quality = self.api.stream_url(self.room_id, self.cfg.stream_preference)
                 log.info("[%s] stream quality %s", self.username, quality)
                 self.quality, self.phase = quality, "recording"
+                self.wait_until = None
                 self._run_ffmpeg(url)
             except CaptchaRequired as e:
                 self.notifier.send(f"⚠️ @{self.username}: {e}")
                 return
             except TikTokError as e:
                 log.warning("[%s] cannot get stream: %s", self.username, e)
-
             if self._stop_event.is_set():
                 return
-            if time.time() - started > 120:
-                attempt = 0  # it recorded for a while, so this is a fresh drop
-            if attempt >= len(delays):
-                log.info("[%s] gave up after %d reconnect attempts", self.username, attempt)
-                return
-            if not self._still_live():
-                log.info("[%s] live has ended", self.username)
-                return
-            delay = delays[attempt]
-            attempt += 1
-            self.phase = "reconnecting"
-            log.info("[%s] stream dropped, still live; reconnecting in %ss (%d/%d)",
-                     self.username, delay, attempt, len(delays))
-            if self._stop_event.wait(delay):
-                return
 
-    def _still_live(self):
+            # A drop starts when real recording stops; brief failed retries don't restart the clock
+            if drop_since is None or time.time() - started > 60:
+                drop_since, tries = time.time(), 0
+                log.info("[%s] stream stopped; waiting up to %g min for it to come back",
+                         self.username, self.cfg.rejoin_minutes)
+            if not self._wait_for_return(drop_since + grace, tries):
+                log.info("[%s] not live again within %g min; finishing this clip",
+                         self.username, self.cfg.rejoin_minutes)
+                return
+            tries += 1
+
+    def _wait_for_return(self, deadline, tries):
+        """Poll until the channel is live again (True) or the deadline passes (False)."""
+        self.phase, self.wait_until = "waiting", deadline
+        delays = self.cfg.reconnect_delays or [10]
+        first = True
+        while not self._stop_event.is_set():
+            if not first or tries:
+                delay = min(delays[min(tries, len(delays) - 1)], 30)
+                tries += 1
+                if self._stop_event.wait(max(0, min(delay, deadline - time.time()))):
+                    return False
+            first = False
+            if self._is_live_again():
+                log.info("[%s] live again (room %s); continuing the same clip", self.username, self.room_id)
+                self.phase = "reconnecting"
+                return True
+            if time.time() >= deadline:
+                return False
+        return False
+
+    def _is_live_again(self):
+        """Look the user up again: a restarted live has a new room ID."""
         try:
-            return self.api.check_alive([self.room_id]).get(self.room_id, False)
-        except CaptchaRequired:
-            raise
+            st = self.api.room_status(self.username)
+        except CaptchaRequired as e:
+            self.notifier.send(f"⚠️ @{self.username}: {e}")
+            return False
         except TikTokError as e:
-            log.warning("[%s] check_alive failed (%s); assuming still live", self.username, e)
+            log.warning("[%s] status check failed: %s", self.username, e)
+            return False
+        if st.is_live and st.room_id:
+            self.room_id = st.room_id
             return True
+        return False
 
     def _run_ffmpeg(self, url):
         # The run number keeps a reconnect in the same second from overwriting a file

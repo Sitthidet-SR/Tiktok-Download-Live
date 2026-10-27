@@ -1,22 +1,38 @@
 {
-  "channels": ["your_username", "another_channel"],
+  "channels": [
+    "your_username",
+    "another_channel"
+  ],
   "cookies_file": "cookies.txt",
   "output_dir": "recordings",
-
   "check_interval_min": 60,
   "check_interval_max": 180,
   "jitter": 0.2,
   "min_request_gap": 3,
-
   "segment_seconds": 1800,
   "stats_interval": 60,
-  "stream_preference": ["origin", "uhd", "FULL_HD1", "hd", "HD1", "sd", "SD1", "ld", "SD2"],
-  "reconnect_delays": [5, 10, 20, 40, 80],
+  "stream_preference": [
+    "origin",
+    "uhd",
+    "FULL_HD1",
+    "hd",
+    "HD1",
+    "sd",
+    "SD1",
+    "ld",
+    "SD2"
+  ],
   "merge_on_end": true,
   "delete_segments_after_merge": false,
   "captcha_pause_minutes": 30,
-
   "discord_webhook_url": "",
   "line_channel_token": "",
-  "line_to": ""
+  "line_to": "",
+  "rejoin_minutes": 8,
+  "reconnect_delays": [
+    5,
+    10,
+    20,
+    30
+  ]
 }

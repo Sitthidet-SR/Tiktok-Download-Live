@@ -160,7 +160,7 @@ function renderBanner() {
 
 function channelBadge(c) {
   if (c.recording) {
-    const label = { reconnecting: "กำลังเชื่อมต่อใหม่", merging: "กำลังรวมไฟล์", starting: "กำลังเริ่ม" }[c.recording.phase] || "กำลังบันทึก";
+    const label = { reconnecting: "กำลังเชื่อมต่อใหม่", merging: "กำลังรวมไฟล์", starting: "กำลังเริ่ม", waiting: "ไลฟ์หลุด รอกลับมา" }[c.recording.phase] || "กำลังบันทึก";
     return `<span class="badge badge-rec"><i></i>${label}</span>`;
   }
   if (c.paused) return '<span class="badge badge-off">หยุดเฝ้า</span>';
@@ -209,6 +209,7 @@ function renderChannels() {
           <span title="จำนวนคนที่ส่งของขวัญ (รวมทั้งไลฟ์)">${ICON.gift}<b>${fmtNum(st.gift_senders)}</b> คนส่ง</span>
           <span title="${st.diamonds != null ? st.diamonds.toLocaleString() + " เพชร" : ""}">${ICON.gem}<b>${fmtNum(st.diamonds)}</b> เพชร</span>
         </div>
+        ${r.phase === "waiting" && r.wait_until ? `<p class="wait-note">ถ้าไลฟ์กลับมาภายใน <b data-left="${r.wait_until}">${fmtClock(r.wait_until - now())}</b> จะต่อเป็นคลิปเดียวกัน</p>` : ""}
         <div class="rec-info">
         <div><span>เวลา</span><b data-since="${r.started_at}">${fmtClock(now() - r.started_at)}</b></div>
         <div><span>ขนาด</span><b>${fmtBytes(r.bytes)}</b></div>
@@ -290,6 +291,7 @@ function renderStats() {
 // live counters between polls
 setInterval(() => {
   document.querySelectorAll("[data-since]").forEach((el) => { el.textContent = fmtClock(now() - +el.dataset.since); });
+  document.querySelectorAll("[data-left]").forEach((el) => { el.textContent = fmtClock(+el.dataset.left - now()); });
   document.querySelectorAll("[data-next]").forEach((el) => { el.textContent = fmtIn(+el.dataset.next); });
 }, 1000);
 

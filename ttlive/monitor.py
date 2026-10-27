@@ -119,6 +119,7 @@ class Monitor:
                 if rec:
                     item["recording"] = {
                         "phase": rec.phase, "started_at": rec.started_at, "quality": rec.quality,
+                        "wait_until": rec.wait_until,
                         "bytes": rec.bytes_recorded(), "session_dir": rec.session_dir,
                         "stats": rec.stats,
                     }
