@@ -408,5 +408,91 @@ class WebTests(Base):
             handler.app.token = None
 
 
+class ChromeCookieTests(Base):
+    def make_db(self, rows, version=24):
+        """A fake Chrome profile with v10 ("peanuts") encrypted cookies."""
+        import hashlib
+        import sqlite3
+        prof = os.path.join(self.tmp, "chrome", "Default")
+        os.makedirs(prof)
+        con = sqlite3.connect(os.path.join(prof, "Cookies"))
+        con.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+        con.execute("INSERT INTO meta VALUES ('version', ?)", (str(version),))
+        con.execute("CREATE TABLE cookies (host_key TEXT, path TEXT, is_secure INT, expires_utc INT, "
+                    "name TEXT, value TEXT, encrypted_value BLOB)")
+        key = hashlib.pbkdf2_hmac("sha1", b"peanuts", b"saltysalt", 1, 16)
+        for host, name, value in rows:
+            plain = (hashlib.sha256(host.encode()).digest() if version >= 24 else b"") + value.encode()
+            enc = subprocess.run(["openssl", "enc", "-aes-128-cbc", "-K", key.hex(), "-iv", "20" * 16],
+                                 input=plain, capture_output=True, check=True).stdout
+            con.execute("INSERT INTO cookies VALUES (?, '/', 1, 13400000000000000, ?, '', ?)",
+                        (host, name, b"v10" + enc))
+        con.commit()
+        con.close()
+        return os.path.join(self.tmp, "chrome")
+
+    def test_reads_only_tiktok_and_decrypts(self):
+        import ttlive.browser_cookies as bc
+        base = self.make_db([(".tiktok.com", "sessionid", "abc123"), (".google.com", "SID", "secret"),
+                             ("www.tiktok.com", "msToken", "tok")])
+        old = bc.CHROME_DIRS
+        bc.CHROME_DIRS = [base]
+        try:
+            text = bc.read_tiktok_cookies()
+        finally:
+            bc.CHROME_DIRS = old
+        self.assertIn("\tsessionid\tabc123", text)
+        self.assertIn("\tmsToken\ttok", text)
+        self.assertNotIn("google", text)
+        path = os.path.join(self.tmp, "from_chrome.txt")
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o600)
+        HttpClient(path, "ua")  # loads as a valid Netscape file
+
+    def test_captcha_resumes_only_after_a_passing_probe(self):
+        import ttlive.browser_cookies as bc
+
+        class FakeHttp:
+            reason = "captcha"
+            probes = 0
+            pass_probe = False
+            replaced = []
+
+            def pause_info(self):
+                return {"reason": self.reason, "seconds": 100}
+
+            def replace_cookies(self, text, resume=True):
+                self.replaced.append(resume)
+
+            def probe(self, url):
+                FakeHttp.probes += 1
+                if self.pass_probe:
+                    self.reason = ""
+                return self.pass_probe
+
+        texts = iter(["a", "b", "c", "d"])
+        old = bc.read_tiktok_cookies
+        bc.read_tiktok_cookies = lambda profile: next(texts)
+        sent = []
+
+        class N:
+            def send(self, t):
+                sent.append(t)
+        try:
+            http_ = FakeHttp()
+            sync = bc.CookieSync(http_, N())
+            self.assertEqual(sync.sync(), "still_captcha")   # new cookies -> one probe, fails
+            self.assertEqual(FakeHttp.probes, 1)
+            self.assertEqual(sync.sync(), "still_captcha")   # changed again, but probes are 2 min apart
+            self.assertEqual(FakeHttp.probes, 1)
+            self.assertEqual(http_.replaced, [False, False])  # cookies saved, pause kept
+            http_.pass_probe = True
+            self.assertEqual(sync.sync(force_probe=True), "resumed")  # the "ยืนยันแล้ว" button
+            self.assertTrue(any("ผ่านการยืนยัน" in t for t in sent))
+        finally:
+            bc.read_tiktok_cookies = old
+
+
 if __name__ == "__main__":
     unittest.main()

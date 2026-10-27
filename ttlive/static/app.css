@@ -98,6 +98,8 @@ main { position: relative; z-index: 1; max-width: 1240px; margin: 0 auto; paddin
 .banner b { display: block; font-size: 15px; }
 .banner p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
 .banner .btn { margin-left: auto; align-self: center; }
+.banner-actions { margin-left: auto; align-self: center; display: flex; gap: 8px; flex-wrap: wrap; }
+.banner-actions .btn { margin-left: 0; }
 
 /* ---- stats ---- */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }

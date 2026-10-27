@@ -114,8 +114,9 @@ class HttpClient:
         return {"seconds": -1 if left == float("inf") else int(left),
                 "reason": self._pause_reason if left else ""}
 
-    def replace_cookies(self, text):
-        """Validate new cookies.txt content, save it (owner-only) and use it now."""
+    def replace_cookies(self, text, resume=True):
+        """Validate new cookies.txt content, save it (owner-only) and use it now.
+        resume=False keeps a CAPTCHA pause (fresh cookies alone don't prove it was solved)."""
         tmp = self.cookies_file + ".new"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -129,8 +130,28 @@ class HttpClient:
         os.chmod(self.cookies_file, 0o600)
         with self._lock:
             self.reload_cookies()
-            if self._pause_reason in ("captcha", "no_cookies"):
+            if self._pause_reason == "no_cookies" or (resume and self._pause_reason == "captcha"):
                 self._paused_until = 0
+
+    def probe(self, url):
+        """One request that ignores a CAPTCHA pause, to see if the check was solved.
+        Ends the pause and returns True if TikTok answers normally."""
+        with self._lock:
+            wait = self._last_request + self.min_gap - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                self._do_get(url, "https://www.tiktok.com/")
+            except CaptchaRequired:
+                return False
+            except TikTokError as e:
+                log.info("probe failed: %s", e)
+                return False
+            finally:
+                self._last_request = time.time()
+            if self._pause_reason == "captcha":
+                self._paused_until = 0
+            return True
 
     def _pause(self, seconds, reason):
         self._paused_until = max(self._paused_until, time.time() + seconds)

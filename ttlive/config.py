@@ -15,6 +15,9 @@ class Config:
     channels: list
     paused_channels: list = field(default_factory=list)  # set from the web UI
     cookies_file: str = "cookies.txt"
+    # "chrome": keep cookies.txt in step with Chrome's tiktok.com cookies automatically
+    cookies_from_browser: str = ""
+    browser_profile: str = "Default"
     output_dir: str = "recordings"
     # Seconds between status checks for each channel (a random value in this range, then +/- jitter)
     check_interval_min: int = 60
@@ -73,6 +76,8 @@ def load_config(path, allow_empty=False):
         raise ValueError("check_interval_min must be at least 30 seconds (the plan recommends 60-180)")
     if cfg.check_interval_max < cfg.check_interval_min:
         raise ValueError("check_interval_max must be >= check_interval_min")
+    if cfg.cookies_from_browser not in ("", "chrome"):
+        raise ValueError("cookies_from_browser must be \"chrome\" or empty")
     if cfg.rejoin_minutes < 0 or cfg.rejoin_minutes > 120:
         raise ValueError("rejoin_minutes must be between 0 and 120")
     if cfg.stats_interval < 30:

@@ -22,9 +22,31 @@ def setup(args, allow_empty=False):
     cfg = load_config(args.config, allow_empty)
     if not shutil.which(cfg.ffmpeg):
         sys.exit(f"ffmpeg not found ({cfg.ffmpeg}). Install it: sudo dnf install ffmpeg")
+    if cfg.cookies_from_browser:
+        # Start from Chrome's current cookies; CookieSync keeps them fresh afterwards
+        from .browser_cookies import BrowserCookieError, read_tiktok_cookies
+        try:
+            text = read_tiktok_cookies(cfg.browser_profile)
+            path = cfg.path(cfg.cookies_file)
+            fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(path + ".new", path)
+            log.info("loaded tiktok.com cookies from Chrome (%s)", cfg.browser_profile)
+        except (BrowserCookieError, OSError) as e:
+            log.warning("could not read cookies from Chrome, using %s: %s", cfg.cookies_file, e)
     http = HttpClient(cfg.path(cfg.cookies_file), cfg.user_agent,
                       cfg.min_request_gap, cfg.captcha_pause_minutes, require_cookies=not allow_empty)
     return cfg, http, TikTokApi(http)
+
+
+def start_cookie_sync(cfg, http, notifier, on_change=None):
+    if not cfg.cookies_from_browser:
+        return None
+    from .browser_cookies import CookieSync
+    sync = CookieSync(http, notifier, cfg.browser_profile, on_change)
+    sync.start()
+    return sync
 
 
 def check_login(api):
@@ -46,6 +68,7 @@ def cmd_run(args):
     if check_login(api) is None:
         notifier.send("⚠️ cookie อาจหมดอายุหรือยังไม่ได้ล็อกอิน: export cookies.txt ใหม่")
     monitor = Monitor(cfg, http, api, notifier)
+    start_cookie_sync(cfg, http, notifier)
 
     def on_signal(signum, _frame):
         log.info("stopping (finishing current recordings)...")
@@ -92,6 +115,11 @@ def cmd_web(args):
     monitor = Monitor(cfg, http, api, notifier,
                       on_channels_changed=lambda names, paused: save_channels(args.config, names, paused))
     server, url = serve(cfg, http, api, monitor, notifier, args.host, args.port)
+    app = server.RequestHandlerClass.app
+    app.cookie_sync = start_cookie_sync(
+        cfg, http, notifier,
+        # a fresh login in Chrome should show up in the UI without waiting 6 hours
+        on_change=lambda: app.account.get("state") != "ok" and app.refresh_account())
     threading.Thread(target=monitor.run, name="monitor", daemon=True).start()
 
     def on_signal(signum, _frame):

@@ -97,9 +97,17 @@ python3 -m ttlive merge recordings/someuser/someuser_20261027_200000 --delete
 
 ไฟล์จะอยู่ที่ `recordings/<user>/<user>_<วันเวลา>/*.ts` ระหว่างบันทึก และ `recordings/<user>/<user>_<วันเวลา>.mp4` หลังไลฟ์จบ
 
+## อ่าน cookie จาก Chrome อัตโนมัติ (แนะนำ)
+
+ใส่ `"cookies_from_browser": "chrome"` ใน `config.json` (และ `"browser_profile"` ถ้าไม่ได้ใช้โปรไฟล์ `Default`) โปรแกรมจะอ่าน cookie ของ tiktok.com จาก Chrome ในเครื่องเองทุก 1 นาที แล้วเขียนลง `cookies.txt` ให้ ไม่ต้อง export เอง อ่านเฉพาะ cookie ของ tiktok.com เท่านั้น ใช้กุญแจ "Chrome Safe Storage" จาก KWallet หรือ keyring ของเครื่อง และถอดรหัสด้วยคำสั่ง `openssl`
+
 ## เมื่อเจอ CAPTCHA หรือ cookie หมดอายุ
 
-โปรแกรมจะ **ไม่** พยายามแก้หรือหลบ CAPTCHA แต่จะหยุดส่งคำขอทั้งหมดตาม `captcha_pause_minutes` และแจ้งเตือน
+โปรแกรมจะ **ไม่** พยายามแก้หรือหลบ CAPTCHA แต่จะหยุดส่งคำขอทั้งหมดตาม `captcha_pause_minutes` และแจ้งเตือน (ไลฟ์ที่กำลังอัดอยู่ยังอัดต่อ)
+
+**ถ้าตั้งให้อ่าน cookie จาก Chrome:** กดปุ่ม "เปิด TikTok" ในแถบเตือน ยืนยันตัวตนใน Chrome แล้วกด "ยืนยันแล้ว ทำงานต่อ" โปรแกรมจะดึง cookie ใหม่และลองเช็ก 1 ครั้ง ถ้าผ่านก็ทำงานต่อทันที ถ้าไม่กดปุ่ม โปรแกรมจะลองเองไม่เกิน 1 ครั้งทุก 2 นาทีเมื่อเห็น cookie ใน Chrome เปลี่ยน
+
+**ถ้าใช้ไฟล์ cookies.txt:**
 
 1. เปิด tiktok.com ในเบราว์เซอร์แล้วยืนยันตัวตนเอง
 2. Export `cookies.txt` ใหม่ทับไฟล์เดิม

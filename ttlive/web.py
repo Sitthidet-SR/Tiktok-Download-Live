@@ -31,6 +31,7 @@ class App:
     def __init__(self, cfg, http, api, monitor, notifier, token=None):
         self.cfg, self.http, self.api, self.monitor, self.notifier = cfg, http, api, monitor, notifier
         self.token = token
+        self.cookie_sync = None  # set when cookies come from Chrome
         self.account = {"state": "checking", "name": None}
         self.out_dir = os.path.realpath(cfg.path(cfg.output_dir))
         os.makedirs(self.out_dir, exist_ok=True)
@@ -61,6 +62,7 @@ class App:
             "now": time.time(),
             "account": self.account,
             "pause": self.http.pause_info(),
+            "cookie_sync": self.cookie_sync.status() if self.cookie_sync else None,
             "channels": self.monitor.snapshot(),
             "events": list(self.notifier.events)[-30:][::-1],
             "settings": {"check_min": self.cfg.check_interval_min, "check_max": self.cfg.check_interval_max,
@@ -209,6 +211,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(400, "ไฟล์นี้ไม่ใช่ cookies.txt แบบ Netscape หรือไม่มี cookie ของ tiktok.com")
                 self.app.refresh_account()
                 return self._json({"ok": True})
+            if path == "/api/cookies/sync":
+                if not self.app.cookie_sync:
+                    return self._error(400, "ยังไม่ได้ตั้งให้อ่าน cookie จาก Chrome")
+                result = self.app.cookie_sync.sync(force_probe=True)
+                if result == "error":
+                    return self._error(500, "อ่าน cookie จาก Chrome ไม่ได้: " + self.app.cookie_sync.error)
+                if result != "still_captcha":
+                    self.app.refresh_account()
+                return self._json({"ok": True, "result": result})
             if path == "/api/merge":
                 full = self.app.safe_path(str(body.get("path", "")))
                 if not os.path.isdir(full):

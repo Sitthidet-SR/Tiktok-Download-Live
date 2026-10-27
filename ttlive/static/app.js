@@ -129,32 +129,44 @@ function renderAccount() {
   else if (a.state === "logged_out") { cls = "pill pill-warn"; text = "cookie หมดอายุ"; }
   else if (a.state === "unknown") { cls = "pill pill-warn"; text = "ตรวจ cookie ไม่ได้"; }
   el.className = cls;
-  el.title = a.error || "";
+  const sync = state.cookie_sync;
+  el.title = [a.error, sync && (sync.error ? "อ่าน cookie จาก Chrome ไม่ได้: " + sync.error
+    : sync.last_sync ? "ดึง cookie จาก Chrome ล่าสุด " + fmtAgo(sync.last_sync) : "")].filter(Boolean).join("\n");
   el.innerHTML = `<span class="dot"></span><span>${esc(text)}</span>`;
 }
 
 function renderBanner() {
   const p = state.pause, el = $("#banner");
-  let title = "", body = "", action = false;
+  let title = "", body = "", action = false, captcha = false;
+  const sync = state.cookie_sync;
   if (p.reason === "no_cookies") {
     title = "ยังไม่ได้ใส่ cookie";
     body = "อัปโหลดไฟล์ cookies.txt จากบัญชี TikTok ของคุณเพื่อเริ่มเฝ้าดูช่อง";
     action = true;
   } else if (p.reason === "captcha") {
     title = "TikTok ขอให้ยืนยันตัวตน (CAPTCHA)";
-    body = `หยุดเช็กชั่วคราว เหลือ ${fmtClock(p.seconds)} · เปิด tiktok.com ในเบราว์เซอร์ ยืนยันตัวตนเอง แล้ว export cookies.txt ใหม่มาอัปโหลด`;
-    action = true;
+    body = sync
+      ? `หยุดเช็กช่องใหม่ชั่วคราว (ไลฟ์ที่กำลังอัดยังอัดต่อ) · กด “เปิด TikTok” แล้วยืนยันใน Chrome จากนั้นกด “ยืนยันแล้ว” โปรแกรมจะดึง cookie ใหม่จาก Chrome เอง`
+      : `หยุดเช็กชั่วคราว เหลือ ${fmtClock(p.seconds)} · เปิด tiktok.com ในเบราว์เซอร์ ยืนยันตัวตนเอง แล้ว export cookies.txt ใหม่มาอัปโหลด`;
+    action = !sync;
+    captcha = true;
   } else if (p.reason) {
     title = "TikTok ขอให้ช้าลง (HTTP 429)";
     body = `รอสักครู่แล้วจะทำงานต่อเอง เหลือ ${fmtClock(p.seconds)}`;
   } else if (state.account.state === "logged_out") {
     title = "cookie หมดอายุหรือยังไม่ได้ล็อกอิน";
-    body = "ช่องที่ต้องล็อกอินหรือจำกัดอายุอาจดูไม่ได้ ล็อกอิน tiktok.com แล้ว export cookies.txt ใหม่";
-    action = true;
+    body = sync
+      ? "ล็อกอิน tiktok.com ใน Chrome แล้วโปรแกรมจะดึง cookie ใหม่เองภายใน 1 นาที"
+      : "ช่องที่ต้องล็อกอินหรือจำกัดอายุอาจดูไม่ได้ ล็อกอิน tiktok.com แล้ว export cookies.txt ใหม่";
+    action = !sync;
   }
   el.hidden = !title;
   if (!title) return;
   el.innerHTML = `${ICON.warn}<div><b>${esc(title)}</b><p>${esc(body)}</p></div>` +
+    (captcha ? `<div class="banner-actions">
+        <a class="btn btn-sm" href="https://www.tiktok.com/" target="_blank" rel="noopener noreferrer">เปิด TikTok ↗</a>
+        ${sync ? '<button class="btn btn-primary btn-sm" data-sync-cookies>ยืนยันแล้ว ทำงานต่อ</button>' : ""}
+      </div>` : "") +
     (action ? '<button class="btn btn-primary btn-sm" data-open-cookies>อัปโหลด cookie</button>' : "");
 }
 
@@ -347,6 +359,17 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (e.target.closest("[data-open-cookies]")) openCookies();
+  const syncBtn = e.target.closest("[data-sync-cookies]");
+  if (syncBtn) {
+    syncBtn.disabled = true;
+    syncBtn.textContent = "กำลังตรวจ…";
+    try {
+      const r = await api("/api/cookies/sync", {});
+      const msg = { resumed: "ผ่านการยืนยันแล้ว ทำงานต่อ", still_captcha: "TikTok ยังขอให้ยืนยันอยู่ ลองยืนยันใน Chrome อีกครั้ง", updated: "ดึง cookie ใหม่จาก Chrome แล้ว", same: "cookie ใน Chrome ยังเป็นชุดเดิม" }[r.result] || "เรียบร้อย";
+      toast(msg, r.result === "still_captcha");
+    } catch (err) { toast(err.message, true); }
+    refreshState();
+  }
 });
 
 // video dialog
@@ -359,6 +382,7 @@ $("#dlg-video").addEventListener("cancel", (e) => { e.preventDefault(); closeVid
 let cookieText = "";
 function openCookies() {
   cookieText = "";
+  $("#cookie-chrome").hidden = !(state && state.cookie_sync);
   $("#cookie-save").disabled = true;
   $("#drop").className = "drop";
   $("#drop-text").innerHTML = "วางไฟล์ cookies.txt ที่นี่ หรือ <u>เลือกไฟล์</u>";

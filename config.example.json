@@ -4,6 +4,8 @@
     "another_channel"
   ],
   "cookies_file": "cookies.txt",
+  "cookies_from_browser": "",
+  "browser_profile": "Default",
   "output_dir": "recordings",
   "check_interval_min": 60,
   "check_interval_max": 180,
