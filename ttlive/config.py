@@ -24,7 +24,10 @@ class Config:
     segment_seconds: int = 1800
     # While recording, refresh viewer/like counts this often (seconds)
     stats_interval: int = 60
-    stream_preference: list = field(default_factory=lambda: ["origin", "FULL_HD1", "HD1", "SD1", "SD2"])
+    # Highest first. "origin" is the streamer's own upload; uhd/hd/sd/ld come from the
+    # newer stream data, FULL_HD1/HD1/SD1/SD2 from the older list. "ao" (audio only) is never picked.
+    stream_preference: list = field(default_factory=lambda: [
+        "origin", "uhd", "FULL_HD1", "hd", "HD1", "sd", "SD1", "ld", "SD2"])
     reconnect_delays: list = field(default_factory=lambda: [5, 10, 20, 40, 80])
     merge_on_end: bool = True
     delete_segments_after_merge: bool = False

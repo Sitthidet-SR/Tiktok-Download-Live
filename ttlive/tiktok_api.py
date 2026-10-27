@@ -92,11 +92,12 @@ class TikTokApi:
         candidates = extract_stream_urls(room)
         if not candidates:
             raise TikTokError("live room has no stream URL (age/region restricted, or the API changed)")
+        log.info("room %s offers: %s", room_id, ", ".join(candidates))
         for q in preference:
             if q in candidates:
                 return candidates[q], q
-        q = next(iter(candidates))
-        return candidates[q], q
+        video = [q for q in candidates if q != "ao"] or list(candidates)
+        return candidates[video[0]], video[0]
 
 
 def _int(v):
