@@ -40,6 +40,9 @@ class Config:
     merge_on_end: bool = True
     delete_segments_after_merge: bool = True  # only after the merged file is verified
     captcha_pause_minutes: int = 30
+    # Delete the oldest merged clips when free disk space drops below this many GB (set from the web UI)
+    auto_delete_enabled: bool = False
+    auto_delete_free_gb: float = 50
     user_agent: str = DEFAULT_UA
     ffmpeg: str = "ffmpeg"
     discord_webhook_url: str = ""
@@ -82,6 +85,21 @@ def load_config(path, allow_empty=False):
         raise ValueError("rejoin_minutes must be between 0 and 120")
     if cfg.stats_interval < 30:
         raise ValueError("stats_interval must be at least 30 seconds")
+    if not 5 <= cfg.auto_delete_free_gb <= 10000:
+        raise ValueError("auto_delete_free_gb must be between 5 and 10000")
     if cfg.min_request_gap < 1:
         raise ValueError("min_request_gap must be at least 1 second")
     return cfg
+
+
+def update_config(path, **values):
+    """Change some settings in config.json in place, keeping everything else."""
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    raw.update(values)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # it can hold notification tokens
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(raw, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)

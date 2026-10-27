@@ -7,3 +7,9 @@ recordings/
 __pycache__/
 *.pyc
 ttlive.log
+
+# YouTube sign-in and the phone access token
+client_secret*.json
+youtube_token.json
+youtube_uploads.json
+.web_token

@@ -37,10 +37,15 @@
         <svg viewBox="0 0 24 24"><path d="M12 3v12m0-12 4 4m-4-4-4 4M4 15v3a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3"/></svg>
         <span>จัดการ cookie</span>
       </button>
+      <div class="side-tools">
+        <button class="btn btn-ghost btn-sm" id="btn-phone" title="เปิดหน้านี้บนมือถือ"><svg viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M11 18h2"/></svg><span>มือถือ</span></button>
+        <button class="btn btn-ghost btn-sm" id="btn-youtube" title="ตั้งค่า YouTube"><svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="4"/><path d="m10 9.5 4.5 2.5-4.5 2.5z" fill="currentColor"/></svg><span>YouTube</span></button>
+      </div>
       <div class="disk">
         <div class="disk-head"><span>พื้นที่ดิสก์</span><b id="disk-free">–</b></div>
         <div class="meter"><i id="disk-bar"></i></div>
         <span class="disk-note" id="disk-note"></span>
+        <button class="link-btn" id="btn-storage"><svg viewBox="0 0 24 24"><path d="M4 7h16M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg><span>ลบคลิปเก่าอัตโนมัติ: ปิด</span></button>
       </div>
     </div>
   </aside>
@@ -132,7 +137,66 @@
   </div>
 </dialog>
 
+<dialog id="dlg-storage" class="dialog">
+  <form method="dialog" class="dialog-body" id="storage-form">
+    <div class="dialog-head">
+      <h3>ลบคลิปเก่าอัตโนมัติ</h3>
+      <button class="icon-btn" value="cancel" aria-label="ปิด"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <label class="switch"><input type="checkbox" id="ad-enabled"><i></i><span>เปิดใช้</span></label>
+    <label class="field">เมื่อพื้นที่ว่างเหลือต่ำกว่า
+      <span class="field-row"><input type="number" id="ad-gb" min="5" max="10000" step="1" inputmode="numeric"> GB</span>
+    </label>
+    <p class="hint">โปรแกรมจะลบคลิป MP4 ที่เก่าที่สุดทีละไฟล์จนพื้นที่ว่างกลับมาเกินค่านี้ เช็กทุก 5 นาที จะไม่ลบคลิปที่กำลังอัด ไฟล์ย่อยที่ยังไม่ได้รวม หรือคลิปที่กำลังอัปโหลด และจะแจ้งเตือนทุกครั้งที่ลบ <span id="ad-now"></span></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" value="cancel">ยกเลิก</button>
+      <button class="btn btn-primary" value="default">บันทึก</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-phone" class="dialog">
+  <div class="dialog-body">
+    <div class="dialog-head">
+      <h3>เปิดบนมือถือ</h3>
+      <button class="icon-btn" onclick="this.closest('dialog').close()" aria-label="ปิด"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div id="phone-on">
+      <div class="qr" id="qr"></div>
+      <p class="hint center">ให้มือถือต่อ Wi-Fi วงเดียวกับคอมเครื่องนี้ แล้วสแกนด้วยกล้อง</p>
+      <div class="url-row"><code id="phone-url"></code><button class="btn btn-sm" id="phone-copy">คัดลอก</button></div>
+      <p class="hint">ลิงก์นี้มีรหัสผ่านในตัว ใครได้ไปก็เปิดหน้านี้ได้ อย่าส่งให้คนอื่น</p>
+    </div>
+    <div id="phone-off" hidden>
+      <p class="hint">ตอนนี้โปรแกรมเปิดให้เข้าได้เฉพาะจากคอมเครื่องนี้ ให้รันด้วย <code>--host 0.0.0.0</code> เพื่อให้มือถือในบ้านเข้าได้</p>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlg-youtube" class="dialog">
+  <div class="dialog-body">
+    <div class="dialog-head">
+      <h3>อัปโหลดขึ้น YouTube</h3>
+      <button class="icon-btn" onclick="this.closest('dialog').close()" aria-label="ปิด"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="chrome-box" id="yt-box"><div><b>สถานะ</b><span id="yt-state"></span></div></div>
+    <ol class="steps" id="yt-steps">
+      <li>เปิด <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> แล้วสร้างโปรเจกต์ใหม่ (ฟรี)</li>
+      <li>เปิดใช้ <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer">YouTube Data API v3</a></li>
+      <li>ตั้งค่า <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener noreferrer">OAuth consent screen</a> แบบ <b>External</b> แล้วเพิ่มอีเมลตัวเองใน <b>Test users</b></li>
+      <li>ไปที่ <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Clients</a> → Create client → ชนิด <b>Desktop app</b> → ดาวน์โหลด JSON</li>
+      <li>ย้ายไฟล์ที่ได้ไปไว้ในโฟลเดอร์โปรแกรมชื่อ <code>client_secret.json</code> แล้วเปิดหน้าต่างนี้ใหม่</li>
+    </ol>
+    <p class="hint">คลิปจะขึ้นเป็น <b>ส่วนตัว (Private)</b> เสมอ เห็นเฉพาะคุณ โควตาฟรีของ Google อัปได้ประมาณ 6 คลิปต่อวัน การเชื่อมบัญชีต้องกดจากคอมเครื่องนี้</p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" id="yt-disconnect" hidden>ยกเลิกการเชื่อม</button>
+      <button class="btn btn-primary" id="yt-connect" hidden>เชื่อมบัญชี Google</button>
+    </div>
+  </div>
+</dialog>
+
 <div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="/static/qrcode.min.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -81,8 +81,26 @@ class TikTokApi:
         return data.get("data") or {}
 
     def room_stats(self, room_id):
-        """Current viewers, likes and total viewers of a live room."""
+        """Current viewers, new followers and total viewers of a live room."""
         return parse_stats(self.room_info(room_id))
+
+    def gifters(self, room_id, anchor_id):
+        """{user_id: (name, coins)} for the viewers on the room's ranking.
+
+        room/info reports likes, gifts and diamonds as 0, so gifts come from
+        the "top viewers in this LIVE" list (coins each viewer sent this live).
+        Only viewers currently in the room are listed."""
+        data = self.http.get_json(
+            "https://webcast.tiktok.com/webcast/ranklist/online_audience/?aid=1988"
+            f"&anchor_id={anchor_id}&room_id={room_id}")
+        out = {}
+        for r in (data.get("data") or {}).get("ranks") or []:
+            user = r.get("user") or {}
+            uid = str(user.get("id_str") or user.get("id") or "")
+            score = _int(r.get("score")) or 0
+            if uid and score > 0:
+                out[uid] = (user.get("nickname") or user.get("display_id") or "", score)
+        return out
 
     def stream_url(self, room_id, preference):
         """Return (url, quality_name) for the best available FLV stream, else HLS."""
@@ -120,20 +138,18 @@ def parse_profile(d):
 
 
 def parse_stats(room):
-    """Viewer, like and gift totals from a room/info payload.
+    """Viewer and follower totals from a room/info payload.
 
-    gift_senders = stats.gift_uv_count (unique people who sent gifts) and
-    diamonds = stats.fan_ticket (diamonds received). Both are totals for the
-    whole live; the per-gift list needs the signed chat websocket, which we
-    deliberately don't use."""
+    Its like_count, gift_uv_count and fan_ticket fields are always 0 for web
+    clients; likes are only sent over the signed chat websocket, which we
+    deliberately don't use, and gifts come from TikTokApi.gifters()."""
     stats = room.get("stats") or {}
-    likes = _int(room.get("like_count")) or _int(stats.get("like_count"))
+    owner = room.get("owner") or {}
     return {
         "viewers": _int(room.get("user_count")),
-        "likes": likes,
         "total_viewers": _int(stats.get("total_user")) or _int(stats.get("enter_count")),
-        "gift_senders": _int(stats.get("gift_uv_count")),
-        "diamonds": _int(stats.get("fan_ticket")),
+        "new_followers": _int(stats.get("follow_count")),
+        "anchor_id": str(owner.get("id_str") or owner.get("id") or ""),
     }
 
 

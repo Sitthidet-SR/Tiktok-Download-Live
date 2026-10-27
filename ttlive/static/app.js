@@ -22,6 +22,8 @@ const ICON = {
   rec: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>',
   dot: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg>',
+  yt: '<svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="4"/><path d="m10 9.5 4.5 2.5-4.5 2.5z" fill="currentColor"/></svg>',
+  upload: '<svg viewBox="0 0 24 24"><path d="M12 15V3m0 0 4 4m-4-4-4 4M4 15v3a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3"/></svg>',
 };
 
 const AVATAR_COLORS = [
@@ -161,6 +163,8 @@ async function refreshRecs() {
 // ---------- render ----------
 
 function render() {
+  renderYt();
+  renderAutoDelete();
   renderAccount();
   renderBanner();
   renderOnAir();
@@ -230,13 +234,40 @@ function renderBanner() {
     (action ? '<button class="btn btn-primary btn-sm" data-open-cookies>ใส่ cookie</button>' : ""));
 }
 
+// Gifts are counted from TikTok's "top viewers in this LIVE" list, so they are a lower bound
+function giftTip(st) {
+  const top = (st.top_gifters || []).map((g, i) => `${i + 1}. ${g.name} ${fullNum(g.coins)}`).join("\n");
+  return "นับจากรายชื่อผู้ชมอันดับต้นของไลฟ์ (คนที่ส่งแล้วออกก่อนโปรแกรมเห็นจะไม่ถูกนับ)" + (top ? "\nส่งมากสุด:\n" + top : "");
+}
+
 function airStats(st, viewers, mobile) {
   return `<div class="air-stats${mobile ? " m" : ""}">
     <div class="air-stat" title="${st.peak_viewers ? "สูงสุด " + fullNum(st.peak_viewers) : ""}"><span>${ICON.eye}คนดูตอนนี้</span><b>${fmtNum(viewers)}</b></div>
-    <div class="air-stat likes" title="${fullNum(st.likes)}"><span>${ICON.heart}กดใจ</span><b>${fmtNum(st.likes)}</b></div>
+    <div class="air-stat likes" title="คนที่กดติดตามระหว่างไลฟ์นี้ (TikTok ไม่เปิดยอดกดใจให้ดึงได้)"><span>${ICON.heart}ติดตามใหม่</span><b>${fmtNum(st.new_followers)}</b></div>
     <div class="air-stat" title="คนเข้าดูทั้งหมด"><span>${ICON.users}เข้าดูทั้งหมด</span><b>${fmtNum(st.total_viewers)}</b></div>
-    ${mobile ? "" : `<div class="air-stat" title="จำนวนคนที่ส่งของขวัญ"><span>${ICON.gift}คนส่งของขวัญ</span><b>${fmtNum(st.gift_senders)}</b></div>
-    <div class="air-stat gems" title="${fullNum(st.diamonds)} เพชร"><span>${ICON.gem}เพชร</span><b>${fmtNum(st.diamonds)}</b></div>`}
+    ${mobile ? "" : `<div class="air-stat" title="${esc(giftTip(st))}"><span>${ICON.gift}คนส่งของขวัญ</span><b>${fmtNum(st.gift_senders)}</b></div>
+    <div class="air-stat gems" title="${esc(giftTip(st))}"><span>${ICON.gem}เพชร</span><b>${fmtNum(st.diamonds)}</b></div>`}
+  </div>`;
+}
+
+// Viewer count over the live as a small area chart
+function viewerGraph(hist, mobile) {
+  const m = mobile ? " m" : "";
+  if (!hist || hist.length < 2) return `<div class="vgraph empty-g${m}">กราฟคนดูจะขึ้นหลังเก็บข้อมูลได้ 2 ครั้ง (ทุก 1 นาที)</div>`;
+  const W = 600, H = 70, t0 = hist[0][0], t1 = hist[hist.length - 1][0] || t0 + 1;
+  const max = Math.max(...hist.map((p) => p[1]), 1);
+  const pts = hist.map(([t, v]) => [((t - t0) / (t1 - t0 || 1)) * W, H - 4 - (v / max) * (H - 12)]);
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join("");
+  const peakAt = hist.reduce((b, p, i) => (p[1] > hist[b][1] ? i : b), 0);
+  const [px, py] = pts[peakAt];
+  return `<div class="vgraph${m}" title="คนดูตั้งแต่เริ่มอัด · สูงสุด ${fullNum(max)} คน เวลา ${fmtTime(hist[peakAt][0])}">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id="vg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#25f4ee" stop-opacity=".28"/><stop offset="1" stop-color="#25f4ee" stop-opacity="0"/></linearGradient></defs>
+      <path d="${line}L${W} ${H}L0 ${H}Z" fill="url(#vg)" stroke="none"/>
+      <path d="${line}" fill="none" stroke="#25f4ee" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      <circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.5" fill="#25f4ee" stroke="none" vector-effect="non-scaling-stroke"/>
+    </svg>
+    <div class="vgraph-axis"><span>${fmtTime(t0)}</span><span>สูงสุด ${fmtNum(max)} คน · ${fmtTime(hist[peakAt][0])}</span><span>ตอนนี้</span></div>
   </div>`;
 }
 
@@ -267,9 +298,11 @@ function renderOnAir() {
         <div class="air-name"><b>${esc(c.nickname || "@" + c.username)}</b><a href="https://www.tiktok.com/@${encodeURIComponent(c.username)}/live" target="_blank" rel="noopener noreferrer">@${u} ↗</a></div>
         ${c.title ? `<p class="air-title" title="${esc(c.title)}">${esc(c.title)}</p>` : ""}
         ${airStats(st, viewers, false)}
+        ${viewerGraph(r.history)}
         ${waiting && r.wait_until ? `<p class="air-note">ไลฟ์หลุด ถ้ากลับมาภายใน <b data-left="${r.wait_until}"></b> จะต่อเป็นคลิปเดียวกัน</p>` : ""}
       </div>
       ${airStats(st, viewers, true)}
+      ${viewerGraph(r.history, true)}
       <div class="air-side">
         <span class="timer-label">${phase || "อัดมาแล้ว"}</span>
         <div class="timer" data-since="${r.started_at}"></div>
@@ -356,7 +389,9 @@ function renderRecs(force) {
         </button>
         <div class="clip-body">
           <div class="clip-text"><b>${esc(when)}</b><span>${fmtBytes(r.size)} · MP4</span></div>
+          <span class="yt-slot" data-yt="${esc(r.path)}" data-ytid="${esc(r.youtube || "")}"></span>
           <a class="icon-btn" href="/media/${encodeURI(r.path)}?download=1" title="ดาวน์โหลด" aria-label="ดาวน์โหลด ${esc(r.name)}">${ICON.download}</a>
+          <button class="icon-btn danger" data-del="${esc(r.path)}" data-size="${r.size}" title="ลบคลิป" aria-label="ลบ ${esc(r.name)}">${ICON.trash}</button>
         </div>
       </article>`;
     }
@@ -364,11 +399,27 @@ function renderRecs(force) {
       <div class="thumb ph${r.active ? " active" : ""}">${r.active ? ICON.rec : ICON.layers}${who}</div>
       <div class="clip-body">
         <div class="clip-text"><b>${esc(when)}</b><span>${r.active ? "กำลังอัด" : "ยังไม่รวมไฟล์"} · ${r.segments} ส่วน · ${fmtBytes(r.size)}</span></div>
-        ${r.active ? "" : `<button class="icon-btn" data-merge="${esc(r.path)}" title="รวมเป็น MP4" aria-label="รวมเป็น MP4">${ICON.merge}</button>`}
+        ${r.active ? "" : `<button class="icon-btn" data-merge="${esc(r.path)}" title="รวมเป็น MP4" aria-label="รวมเป็น MP4">${ICON.merge}</button>
+        <button class="icon-btn danger" data-del="${esc(r.path)}" data-size="${r.size}" title="ลบไฟล์ย่อยทั้งหมด" aria-label="ลบ ${esc(r.name)}">${ICON.trash}</button>`}
       </div>
     </article>`;
   }).join("");
   if (draw(el, html)) $$("video[data-src]", el).forEach((v) => thumbObserver.observe(v));
+  renderYt();
+}
+
+// YouTube button on each clip, updated in place so thumbnails don't reload
+function renderYt() {
+  const yt = state && state.youtube;
+  $$("[data-yt]").forEach((el) => {
+    const path = el.dataset.yt, job = yt && yt.jobs[path], id = el.dataset.ytid || (job && job.video_id);
+    let html;
+    if (id) html = `<a class="icon-btn yt-done" href="https://studio.youtube.com/video/${encodeURIComponent(id)}/edit" target="_blank" rel="noopener noreferrer" title="อัปโหลดแล้ว (ส่วนตัว) เปิดใน YouTube Studio">${ICON.yt}</a>`;
+    else if (job && (job.state === "queued" || job.state === "uploading"))
+      html = `<span class="yt-prog" title="กำลังอัปโหลดขึ้น YouTube">${ICON.upload}${Math.floor(job.progress * 100)}%</span>`;
+    else html = `<button class="icon-btn${job && job.state === "error" ? " yt-err" : ""}" data-upload="${esc(path)}" title="${job && job.state === "error" ? esc("อัปโหลดไม่สำเร็จ: " + job.error + " (กดเพื่อลองใหม่)") : "อัปโหลดขึ้น YouTube (ส่วนตัว)"}" aria-label="อัปโหลดขึ้น YouTube">${ICON.yt}</button>`;
+    if (el.innerHTML !== html) el.innerHTML = html;
+  });
 }
 
 // Thumbnails: load a frame from each clip only when it scrolls into view
@@ -416,6 +467,13 @@ function renderDisk() {
   const clips = recs.items.reduce((s, r) => s + (r.size || 0), 0);
   const perHour = 1.8 * 3600 * 1e6 / 8; // ~1.8 Mbps per live
   $("#disk-note").textContent = `คลิปใช้ ${fmtBytes(clips)} · อัดได้อีกราว ${Math.floor(free / perHour)} ชั่วโมง`;
+  renderAutoDelete();
+}
+function renderAutoDelete() {
+  if (!state) return;
+  const s = state.settings;
+  $("#btn-storage span").textContent = s.auto_delete_enabled ? `ลบคลิปเก่าเมื่อว่างต่ำกว่า ${s.auto_delete_free_gb} GB` : "ลบคลิปเก่าอัตโนมัติ: ปิด";
+  $("#btn-storage").classList.toggle("on", !!s.auto_delete_enabled);
 }
 
 // live counters between polls
@@ -492,6 +550,30 @@ document.addEventListener("click", async (e) => {
     v.src = "/media/" + encodeURI(play.dataset.play);
     $("#dlg-video").showModal();
     v.play().catch(() => {});
+    return;
+  }
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    const path = del.dataset.del;
+    if (!confirm(`ลบ ${path.split("/").pop()} (${fmtBytes(+del.dataset.size)}) ออกจากเครื่อง?\nลบแล้วกู้คืนไม่ได้`)) return;
+    del.disabled = true;
+    try {
+      const r = await api("/api/delete", { path });
+      toast(`ลบแล้ว ได้พื้นที่คืน ${fmtBytes(r.freed)}`);
+    } catch (err) { toast(err.message, true); del.disabled = false; }
+    refreshRecs();
+    return;
+  }
+  const up = e.target.closest("[data-upload]");
+  if (up) {
+    const yt = state.youtube;
+    if (!yt.connected) return openYoutube();
+    up.disabled = true;
+    try {
+      await api("/api/youtube/upload", { path: up.dataset.upload, title: up.closest(".clip").querySelector("[data-title]").dataset.title });
+      toast("เริ่มอัปโหลดขึ้น YouTube แบบส่วนตัวแล้ว");
+    } catch (err) { toast(err.message, true); up.disabled = false; }
+    refreshState();
     return;
   }
   const merge = e.target.closest("[data-merge]");
@@ -589,6 +671,73 @@ $("#cookie-form").addEventListener("submit", async (e) => {
 });
 
 $("#rec-search").addEventListener("input", () => renderRecs());
+
+// storage dialog: auto-delete old clips
+$("#btn-storage").addEventListener("click", () => {
+  const s = state.settings;
+  $("#ad-enabled").checked = !!s.auto_delete_enabled;
+  $("#ad-gb").value = s.auto_delete_free_gb;
+  $("#ad-now").textContent = recs.free ? `ตอนนี้ว่าง ${fmtBytes(recs.free)} จาก ${fmtBytes(recs.total)}` : "";
+  $("#dlg-storage").showModal();
+});
+$("#storage-form").addEventListener("submit", async (e) => {
+  if (e.submitter?.value !== "default") return;
+  e.preventDefault();
+  try {
+    await api("/api/auto-delete", { enabled: $("#ad-enabled").checked, free_gb: +$("#ad-gb").value });
+    $("#dlg-storage").close();
+    toast($("#ad-enabled").checked ? "เปิดลบคลิปเก่าอัตโนมัติแล้ว" : "ปิดลบคลิปเก่าอัตโนมัติแล้ว");
+    await refreshState();
+    refreshRecs();
+  } catch (err) { toast(err.message, true); }
+});
+
+// phone dialog: QR code of the LAN link
+$("#btn-phone").addEventListener("click", () => {
+  const url = state.lan_url;
+  $("#phone-on").hidden = !url;
+  $("#phone-off").hidden = !!url;
+  if (url) {
+    const qr = qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+    $("#qr").innerHTML = qr.createSvgTag({ cellSize: 6, margin: 3, scalable: true });
+    $("#phone-url").textContent = url;
+  }
+  $("#dlg-phone").showModal();
+});
+$("#phone-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(state.lan_url); toast("คัดลอกลิงก์แล้ว"); } catch { toast("คัดลอกไม่ได้ เลือกข้อความแล้วคัดลอกเอง", true); }
+});
+
+// YouTube dialog
+function openYoutube() {
+  const yt = state.youtube;
+  $("#yt-state").textContent = yt.connected ? "เชื่อมบัญชีแล้ว กดปุ่ม YouTube บนคลิปเพื่ออัปโหลดแบบส่วนตัว"
+    : yt.configured ? "มีไฟล์ client_secret.json แล้ว กดเชื่อมบัญชีได้เลย" : "ยังไม่ได้ตั้งค่า ทำตามขั้นตอนด้านล่างครั้งเดียว";
+  $("#yt-box").className = "chrome-box" + (yt.connected ? "" : " off");
+  $("#yt-steps").hidden = yt.configured;
+  $("#yt-connect").hidden = yt.connected || !yt.configured;
+  $("#yt-disconnect").hidden = !yt.connected;
+  $("#dlg-youtube").showModal();
+}
+$("#btn-youtube").addEventListener("click", openYoutube);
+$("#yt-connect").addEventListener("click", async () => {
+  try { location.href = (await api("/api/youtube/connect", {})).url; } catch (err) { toast(err.message, true); }
+});
+$("#yt-disconnect").addEventListener("click", async () => {
+  if (!confirm("ยกเลิกการเชื่อมบัญชี YouTube?")) return;
+  await api("/api/youtube/disconnect", {}).catch((err) => toast(err.message, true));
+  $("#dlg-youtube").close();
+  refreshState();
+});
+{
+  const yt = new URLSearchParams(location.search).get("yt");
+  if (yt) {
+    toast(yt === "ok" ? "เชื่อมบัญชี YouTube แล้ว" : yt, yt !== "ok");
+    history.replaceState(null, "", location.pathname + location.hash);
+  }
+}
 
 // ---------- start ----------
 refreshState().then(refreshRecs);

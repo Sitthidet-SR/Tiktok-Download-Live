@@ -127,7 +127,7 @@ class Monitor:
                         "phase": rec.phase, "started_at": rec.started_at, "quality": rec.quality,
                         "wait_until": rec.wait_until,
                         "bytes": rec.bytes_recorded(), "session_dir": rec.session_dir,
-                        "stats": rec.stats,
+                        "stats": rec.stats, "history": rec.history,
                     }
                 out.append(item)
             return out

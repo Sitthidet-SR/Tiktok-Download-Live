@@ -114,7 +114,7 @@ def cmd_web(args):
     notifier = Notifier(cfg)
     monitor = Monitor(cfg, http, api, notifier,
                       on_channels_changed=lambda names, paused: save_channels(args.config, names, paused))
-    server, url = serve(cfg, http, api, monitor, notifier, args.host, args.port)
+    server, url = serve(cfg, http, api, monitor, notifier, args.host, args.port, args.config)
     app = server.RequestHandlerClass.app
     app.cookie_sync = start_cookie_sync(
         cfg, http, notifier,

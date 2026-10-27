@@ -41,7 +41,9 @@ class Recorder(threading.Thread):
         self.phase = "starting"  # starting, recording, reconnecting, merging
         self.output = None  # final .mp4 once merged
         self.wait_until = None  # while waiting for a dropped live to come back
-        self.stats = {}  # viewers, likes, total_viewers, peak_viewers, updated
+        self.stats = {}  # viewers, total_viewers, new_followers, peak_viewers, gift_senders, diamonds, updated
+        self._gifters = {}  # user_id -> (name, most coins seen), kept after they leave the room
+        self.history = []  # [(time, viewers)] for the viewer graph
         stamp = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = os.path.join(cfg.path(cfg.output_dir), username, f"{username}_{stamp}")
 
@@ -82,27 +84,41 @@ class Recorder(threading.Thread):
             self.notifier.send(f"✅ @{self.username} {why} ไฟล์อยู่ใน {self.session_dir}{summary}")
 
     def _stats_loop(self):
-        """Refresh viewer/like counts through the shared, rate-limited client."""
+        """Refresh viewer and gift counts through the shared, rate-limited client."""
         while not self._stop_event.is_set() and not self._finished:
             try:
                 s = self.api.room_stats(self.room_id)
+                if s.get("anchor_id"):
+                    self._add_gifters(self.api.gifters(self.room_id, s["anchor_id"]))
             except CaptchaRequired:
                 return
             except (TikTokError, OSError, ValueError) as e:  # a dropped connection must not end the stats
                 log.debug("[%s] stats failed: %s", self.username, e)
             else:
                 peak = max(self.stats.get("peak_viewers") or 0, s.get("viewers") or 0)
-                self.stats = {**s, "peak_viewers": peak, "updated": time.time()}
+                self.stats = {**s, "peak_viewers": peak, "updated": time.time(), **self._gift_totals()}
+                if s.get("viewers") is not None:
+                    self.history = (self.history + [(int(time.time()), s["viewers"])])[-1440:]
             if self._stop_event.wait(self.cfg.stats_interval):
                 return
+
+    def _add_gifters(self, seen):
+        for uid, (name, coins) in seen.items():
+            old = self._gifters.get(uid, ("", 0))
+            self._gifters[uid] = (name or old[0], max(coins, old[1]))
+
+    def _gift_totals(self):
+        top = sorted(self._gifters.values(), key=lambda g: -g[1])
+        return {"gift_senders": len(top), "diamonds": sum(c for _, c in top),
+                "top_gifters": [{"name": n, "coins": c} for n, c in top[:3]]}
 
     def _stats_summary(self):
         s = self.stats
         parts = []
         if s.get("peak_viewers"):
             parts.append(f"คนดูสูงสุด {s['peak_viewers']:,}")
-        if s.get("likes"):
-            parts.append(f"กดใจ {s['likes']:,}")
+        if s.get("new_followers"):
+            parts.append(f"ติดตามใหม่ {s['new_followers']:,}")
         if s.get("gift_senders"):
             parts.append(f"ส่งของขวัญ {s['gift_senders']:,} คน")
         if s.get("diamonds"):

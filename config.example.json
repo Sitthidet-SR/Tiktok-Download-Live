@@ -27,6 +27,8 @@
   "merge_on_end": true,
   "delete_segments_after_merge": true,
   "captcha_pause_minutes": 30,
+  "auto_delete_enabled": false,
+  "auto_delete_free_gb": 50,
   "discord_webhook_url": "",
   "line_channel_token": "",
   "line_to": "",

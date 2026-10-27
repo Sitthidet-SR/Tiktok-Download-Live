@@ -1,8 +1,9 @@
 """Local web UI: a small JSON API over the Monitor, plus the static page.
 
 Binds to 127.0.0.1 by default. When bound to another address (to open it
-from a phone on the home network), every request needs an access token
-that is printed at startup.
+from a phone on the home network), every request from another device needs
+an access token, kept in .web_token and shown as a QR code in the UI.
+Requests from this computer itself need no token.
 """
 
 import json
@@ -17,8 +18,11 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .config import update_config
 from .http_client import CookieError
+from .library import Janitor, delete_clip
 from .merge import merge_session
+from .youtube import YouTube, YouTubeError
 
 log = logging.getLogger(__name__)
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -28,13 +32,29 @@ LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 class App:
     """State shared by all request handlers."""
 
-    def __init__(self, cfg, http, api, monitor, notifier, token=None):
+    def __init__(self, cfg, http, api, monitor, notifier, token=None, config_path=None, port=8080):
         self.cfg, self.http, self.api, self.monitor, self.notifier = cfg, http, api, monitor, notifier
         self.token = token
+        self.config_path, self.port = config_path, port
         self.cookie_sync = None  # set when cookies come from Chrome
         self.account = {"state": "checking", "name": None}
         self.out_dir = os.path.realpath(cfg.path(cfg.output_dir))
         os.makedirs(self.out_dir, exist_ok=True)
+        self.youtube = YouTube(os.path.realpath(cfg.path(".")), notifier)
+        self.janitor = Janitor(cfg, self.out_dir, notifier, busy=self.youtube.busy_paths)
+
+    def active_dirs(self):
+        return {os.path.realpath(c["recording"]["session_dir"])
+                for c in self.monitor.snapshot() if c["recording"]}
+
+    def set_auto_delete(self, enabled, free_gb):
+        free_gb = float(free_gb)
+        if not 5 <= free_gb <= 10000:
+            raise ValueError("ตั้งพื้นที่ว่างขั้นต่ำได้ 5–10000 GB")
+        self.cfg.auto_delete_enabled, self.cfg.auto_delete_free_gb = bool(enabled), free_gb
+        if self.config_path:
+            update_config(self.config_path, auto_delete_enabled=bool(enabled), auto_delete_free_gb=free_gb)
+        self.janitor.poke()
 
     def watch_account(self, every=6 * 3600):
         """Re-check the login now and then, so expired cookies show up in the UI."""
@@ -66,12 +86,16 @@ class App:
             "channels": self.monitor.snapshot(),
             "events": list(self.notifier.events)[-30:][::-1],
             "settings": {"check_min": self.cfg.check_interval_min, "check_max": self.cfg.check_interval_max,
-                         "segment_seconds": self.cfg.segment_seconds, "output_dir": self.out_dir},
+                         "segment_seconds": self.cfg.segment_seconds, "output_dir": self.out_dir,
+                         "auto_delete_enabled": self.cfg.auto_delete_enabled,
+                         "auto_delete_free_gb": self.cfg.auto_delete_free_gb},
+            "lan_url": f"http://{lan_ip()}:{self.port}/?token={self.token}" if self.token else None,
+            "youtube": self.youtube.status(),
         }
 
     def recordings(self):
-        active = {os.path.realpath(c["recording"]["session_dir"])
-                  for c in self.monitor.snapshot() if c["recording"]}
+        active = self.active_dirs()
+        uploaded = self.youtube.uploads()
         items = []
         for user in sorted(os.listdir(self.out_dir)):
             udir = os.path.join(self.out_dir, user)
@@ -80,8 +104,10 @@ class App:
             for e in os.scandir(udir):
                 if e.is_file() and e.name.endswith(".mp4"):
                     st = e.stat()
-                    items.append({"kind": "video", "user": user, "name": e.name,
-                                  "path": f"{user}/{e.name}", "size": st.st_size, "time": st.st_mtime})
+                    rel = f"{user}/{e.name}"
+                    items.append({"kind": "video", "user": user, "name": e.name, "path": rel,
+                                  "size": st.st_size, "time": st.st_mtime,
+                                  "youtube": (uploaded.get(rel) or {}).get("video_id")})
                 elif e.is_dir():
                     segs = [s for s in os.scandir(e.path) if s.name.endswith(".ts")]
                     # Already merged (segments kept as a backup): the .mp4 row is enough
@@ -132,9 +158,12 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, code, msg):
         self._json({"error": msg}, code)
 
+    def _local(self):
+        return self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
     def _authorized(self):
         token = self.app.token
-        if not token:
+        if not token or self._local():
             return True
         q = parse_qs(urlparse(self.path).query).get("token", [""])[0]
         if secrets.compare_digest(q, token):
@@ -176,6 +205,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.app.state())
         if path == "/api/recordings":
             return self._json(self.app.recordings())
+        if path == "/oauth/youtube":
+            return self._youtube_callback(parse_qs(url.query))
         if path.startswith("/media/"):
             return self._media(unquote(path[len("/media/"):]), download="download" in url.query)
         self._error(404, "not found")
@@ -228,6 +259,34 @@ class Handler(BaseHTTPRequestHandler):
                 if not out:
                     return self._error(500, "รวมไฟล์ไม่สำเร็จ ดูรายละเอียดใน log")
                 return self._json({"ok": True, "output": os.path.relpath(out, self.app.out_dir)})
+            if path == "/api/delete":
+                rel = str(body.get("path", ""))
+                freed = delete_clip(self.app.safe_path(rel), self.app.active_dirs(), self.app.youtube.busy_paths())
+                log.info("deleted %s from the web UI (%.1f MB)", rel, freed / 1e6)
+                return self._json({"ok": True, "freed": freed})
+            if path == "/api/auto-delete":
+                self.app.set_auto_delete(body.get("enabled"), body.get("free_gb", self.app.cfg.auto_delete_free_gb))
+                return self._json({"ok": True})
+            if path == "/api/youtube/connect":
+                if not self._local():
+                    return self._error(400, "ต้องกดเชื่อมบัญชี YouTube จากคอมเครื่องที่รันโปรแกรม (ไม่ใช่จากมือถือ)")
+                url = self.app.youtube.auth_url(f"http://127.0.0.1:{self.app.port}/oauth/youtube")
+                return self._json({"ok": True, "url": url})
+            if path == "/api/youtube/disconnect":
+                self.app.youtube.disconnect()
+                return self._json({"ok": True})
+            if path == "/api/youtube/upload":
+                rel = str(body.get("path", ""))
+                full = self.app.safe_path(rel)
+                if not os.path.isfile(full) or not full.endswith(".mp4"):
+                    return self._error(404, "ไม่พบคลิป")
+                title = str(body.get("title") or os.path.splitext(os.path.basename(rel))[0])
+                self.app.youtube.start_upload(full, rel, title, f"บันทึกจากไลฟ์ TikTok @{rel.split('/')[0]}")
+                return self._json({"ok": True})
+        except YouTubeError as e:
+            return self._error(400, str(e))
+        except FileNotFoundError:
+            return self._error(404, "ไม่พบไฟล์")
         except KeyError:
             return self._error(404, "ไม่พบช่องนี้")
         except (ValueError, CookieError) as e:
@@ -235,6 +294,18 @@ class Handler(BaseHTTPRequestHandler):
         except PermissionError:
             return self._error(403, "forbidden")
         self._error(404, "not found")
+
+    def _youtube_callback(self, q):
+        if "error" in q:
+            msg = "ยกเลิกการเชื่อม YouTube" if q["error"][0] == "access_denied" else "Google: " + q["error"][0]
+        else:
+            try:
+                self.app.youtube.finish(q.get("code", [""])[0], q.get("state", [""])[0])
+                msg = "ok"
+            except (YouTubeError, OSError, ValueError) as e:
+                msg = str(e)
+        from urllib.parse import quote
+        self._send(302, b"", headers={"Location": f"http://localhost:{self.app.port}/?yt={quote(msg)}#library"})
 
     def _static(self, name, headers=None):
         full = os.path.realpath(os.path.join(STATIC, name))
@@ -307,11 +378,28 @@ def lan_ip():
         s.close()
 
 
-def serve(cfg, http, api, monitor, notifier, host="127.0.0.1", port=8080):
-    token = None if host in LOOPBACK else secrets.token_urlsafe(16)
-    app = App(cfg, http, api, monitor, notifier, token)
+def load_token(path):
+    """The phone access token, kept across restarts so a saved QR link keeps working."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            token = f.read().strip()
+        if len(token) >= 16:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(16)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(token + "\n")
+    return token
+
+
+def serve(cfg, http, api, monitor, notifier, host="127.0.0.1", port=8080, config_path=None):
+    token = None if host in LOOPBACK else load_token(cfg.path(".web_token"))
+    app = App(cfg, http, api, monitor, notifier, token, config_path, port)
     app.refresh_account()
     app.watch_account()
+    app.janitor.start()
     handler = type("BoundHandler", (Handler,), {"app": app})
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True

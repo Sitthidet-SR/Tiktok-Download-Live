@@ -164,10 +164,18 @@ class ApiParsingTests(unittest.TestCase):
         prof = parse_profile({"user": {"nickname": "PJ", "avatarMedium": "https://a/b.jpg"},
                               "liveRoom": {"title": "hi", "liveRoomStats": {"userCount": 9, "enterCount": 74457}}})
         self.assertEqual(prof, {"nickname": "PJ", "avatar": "https://a/b.jpg", "title": "hi", "viewers": 9})
-        st = parse_stats({"user_count": 120, "like_count": 5000,
-                          "stats": {"total_user": 441346, "gift_uv_count": 37, "fan_ticket": 8120}})
-        self.assertEqual(st, {"viewers": 120, "likes": 5000, "total_viewers": 441346,
-                              "gift_senders": 37, "diamonds": 8120})
+        st = parse_stats({"user_count": 120, "like_count": 0, "owner": {"id_str": "77"},
+                          "stats": {"total_user": 441346, "follow_count": 51, "fan_ticket": 0}})
+        self.assertEqual(st, {"viewers": 120, "total_viewers": 441346, "new_followers": 51, "anchor_id": "77"})
+
+    def test_gifters_add_up_across_polls(self):
+        from ttlive.recorder import Recorder
+        rec = Recorder.__new__(Recorder)
+        rec._gifters = {}
+        rec._add_gifters({"1": ("A", 100), "2": ("B", 5)})
+        rec._add_gifters({"1": ("A", 150), "3": ("C", 7)})  # B left the room; still counted
+        self.assertEqual(rec._gift_totals(), {"gift_senders": 3, "diamonds": 162, "top_gifters": [
+            {"name": "A", "coins": 150}, {"name": "C", "coins": 7}, {"name": "B", "coins": 5}]})
 
     def test_picks_best_quality(self):
         from ttlive.tiktok_api import pick_best, stream_scores
@@ -248,7 +256,10 @@ class RecordAndMergeTests(Base):
                 return RoomStatus(user, "2" if live else "", live)
 
             def room_stats(self, room_id):
-                return {"viewers": 120, "likes": 3400, "total_viewers": 900}
+                return {"viewers": 120, "total_viewers": 900, "anchor_id": "9"}
+
+            def gifters(self, room_id, anchor_id):
+                return {"1": ("A", 40)}
 
         tmp = self.tmp
 
@@ -401,11 +412,53 @@ class WebTests(Base):
         handler = self.server.RequestHandlerClass
         handler.app.token = "secret"
         try:
+            self.assertEqual(self.call("/api/state")[0], 200)  # this computer itself
+            handler._local = lambda self: False  # pretend the request comes from a phone
             self.assertEqual(self.call("/api/state")[0], 401)
             self.assertEqual(self.call("/api/state?token=secret")[0], 200)
             self.assertEqual(self.call("/api/state", headers={"Cookie": "ttlive_token=secret"})[0], 200)
+            self.assertIn("token=secret", json.loads(self.call("/api/state?token=secret")[1])["lan_url"])
         finally:
             handler.app.token = None
+            del handler._local
+
+    def test_delete_clip_and_auto_delete_setting(self):
+        self.assertEqual(self.call("/api/delete", {"path": "../cookies.txt"})[0], 403)
+        self.assertEqual(self.call("/api/delete", {"path": "alice/nope.mp4"})[0], 404)
+        code, body = self.call("/api/delete", {"path": "alice/a.mp4"})
+        self.assertEqual((code, json.loads(body)["freed"]), (200, 10))
+        self.assertEqual(json.loads(self.call("/api/recordings")[1])["items"], [])
+        self.assertEqual(self.call("/api/auto-delete", {"enabled": True, "free_gb": 1})[0], 400)
+        self.assertEqual(self.call("/api/auto-delete", {"enabled": True, "free_gb": 80})[0], 200)
+        st = json.loads(self.call("/api/state")[1])["settings"]
+        self.assertEqual((st["auto_delete_enabled"], st["auto_delete_free_gb"]), (True, 80))
+
+    def test_janitor_deletes_oldest_until_enough_room(self):
+        from ttlive import library
+        from ttlive.config import Config
+        out = os.path.join(self.tmp, "recordings")
+        for i, name in enumerate(["old.mp4", "mid.mp4", "new.mp4"]):
+            path = os.path.join(out, "alice", name)
+            with open(path, "wb") as f:
+                f.write(b"x")
+            os.utime(path, (1000 + i, 1000 + i))
+        cfg = Config(channels=[], auto_delete_enabled=True, auto_delete_free_gb=10)
+        freed = []
+        orig = library.free_bytes
+        library.free_bytes = lambda p: (8 + 1.5 * len(freed)) * library.GB  # each delete frees 1.5 GB
+        sent = []
+        j = library.Janitor(cfg, out, type("N", (), {"send": lambda s, t: sent.append(t)})(),
+                            busy=lambda: [os.path.realpath(os.path.join(out, "alice", "a.mp4"))])
+        real_delete = library.delete_clip
+        library.delete_clip = lambda c, *a: (freed.append(c), real_delete(c))[1]
+        try:
+            deleted = j.clean()
+        finally:
+            library.free_bytes, library.delete_clip = orig, real_delete
+        # a.mp4 is "being uploaded" and is skipped; old and mid go, new stays
+        self.assertEqual([os.path.basename(d) for d in deleted], ["old.mp4", "mid.mp4"])
+        self.assertTrue(os.path.exists(os.path.join(out, "alice", "new.mp4")))
+        self.assertEqual(len(sent), 1)
 
 
 class ChromeCookieTests(Base):
