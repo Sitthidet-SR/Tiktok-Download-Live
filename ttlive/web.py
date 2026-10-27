@@ -94,7 +94,7 @@ class App:
                                   "active": os.path.realpath(e.path) in active})
         items.sort(key=lambda i: i["time"], reverse=True)
         disk = os.statvfs(self.out_dir)
-        return {"items": items, "free": disk.f_bavail * disk.f_frsize}
+        return {"items": items, "free": disk.f_bavail * disk.f_frsize, "total": disk.f_blocks * disk.f_frsize}
 
     def safe_path(self, rel):
         """Resolve a path under the output folder, refusing anything outside it."""

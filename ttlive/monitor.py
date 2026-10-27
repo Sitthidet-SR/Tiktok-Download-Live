@@ -42,6 +42,7 @@ class Monitor:
         self.lock = threading.RLock()
         self._stop = threading.Event()
         self._captcha_notified = False
+        self._profile_tried = set()
         self._disk_checked = 0.0
         self._disk_warned = False
         self.disk_free = None
@@ -155,16 +156,34 @@ class Monitor:
             with self.lock:
                 due = [u for u, st in self.channels.items()
                        if st.next_check <= now and not st.paused and u not in self.recorders]
+                nameless = [u for u, st in self.channels.items()
+                            if st.paused and not st.profile and u not in self._profile_tried]
             for username in due:
                 if self._stop.is_set():
                     break
                 self._check(username)
+            if nameless and not due:
+                self._fetch_profile(nameless[0])
             self._stop.wait(1)
 
         with self.lock:
             recs = list(self.recorders.values())
         for r in recs:
             r.join(timeout=120)
+
+    def _fetch_profile(self, username):
+        """One lookup so a paused channel still shows its name and picture."""
+        self._profile_tried.add(username)
+        try:
+            result = self.api.room_status(username)
+        except TikTokError as e:  # includes captcha / rate limit; the client handles the pause
+            log.debug("[%s] profile lookup failed: %s", username, e)
+            return
+        with self.lock:
+            st = self.channels.get(username)
+            if st is not None:
+                st.profile = {k: v for k, v in result.profile.items()
+                              if v not in ("", None) and k in ("nickname", "avatar")}
 
     def _check(self, username):
         try:
