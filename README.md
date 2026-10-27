@@ -26,6 +26,20 @@ python3 -m ttlive web --open
 
 **เปิดจากมือถือในวงแลนบ้าน:** `python3 -m ttlive web --host 0.0.0.0` โปรแกรมจะพิมพ์ลิงก์ที่มี `?token=...` ให้ ต้องเปิดด้วยลิงก์นั้นเท่านั้น (กันคนอื่นในเครือข่ายเข้ามาใช้) อย่าแชร์ลิงก์นี้ให้คนที่ไม่ไว้ใจ และอย่าเปิดพอร์ตนี้ออกอินเทอร์เน็ต ถ้า Fedora บล็อกพอร์ต ให้เปิดด้วย `sudo firewall-cmd --add-port=8080/tcp`
 
+## เปิดเองหลังรีสตาร์ทเครื่อง
+
+ใช้ systemd user service (ไฟล์อยู่ที่ `contrib/ttlive.service`) กินแรมราว 30 MB และ CPU แทบเป็นศูนย์ตอนรอ ระหว่างบันทึก ffmpeg ใช้ราว 90 MB และ CPU ไม่ถึง 1% ต่อไลฟ์ เพราะไม่ได้เข้ารหัสใหม่
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/ttlive.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ttlive.service
+loginctl enable-linger "$USER"    # ให้เริ่มตอนบูตแม้ยังไม่ได้ล็อกอิน
+```
+
+คำสั่งที่ใช้บ่อย: `systemctl --user status ttlive` (ดูสถานะ), `systemctl --user restart ttlive` (รีสตาร์ท), `systemctl --user stop ttlive` (หยุด) ตอนหยุดหรือปิดเครื่อง โปรแกรมจะปิดไฟล์ที่กำลังบันทึกและรวมคลิปให้ก่อน (รอได้สูงสุด 5 นาที) log อยู่ใน `ttlive.log`
+
 ## ติดตั้ง
 
 ```bash
@@ -58,7 +72,7 @@ cookie มีค่าเท่ากับรหัสผ่านบัญช�
 | `rejoin_minutes` | 8 | ถ้าไลฟ์หลุดหรือคนไลฟ์ปิดแล้วเปิดใหม่ภายในเวลานี้ (นาที) จะต่อเป็นคลิปเดียวกัน ถ้านานกว่านี้จะขึ้นคลิปใหม่ |
 | `reconnect_delays` | 5, 10, 20, 30 | ระหว่างรอไลฟ์กลับมา เช็กซ้ำห่างกันกี่วินาที (สูงสุด 30) |
 | `merge_on_end` | true | รวม .ts เป็น .mp4 เมื่อไลฟ์จบ |
-| `delete_segments_after_merge` | false | ลบ .ts หลังรวมสำเร็จ |
+| `delete_segments_after_merge` | true | ลบ .ts หลังรวมสำเร็จ (ลบเฉพาะเมื่อตรวจแล้วว่าไฟล์ MP4 ยาวครบ) |
 | `captcha_pause_minutes` | 30 | หยุดนานเท่าไรเมื่อเจอ CAPTCHA |
 | `discord_webhook_url` | ว่าง | ใส่ถ้าอยากได้แจ้งเตือนทาง Discord |
 | `line_channel_token` / `line_to` | ว่าง | ใส่ถ้าอยากได้แจ้งเตือนทาง LINE Messaging API (token ของ channel + user ID ผู้รับ) |

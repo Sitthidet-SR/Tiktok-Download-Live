@@ -23,7 +23,7 @@
     "SD2"
   ],
   "merge_on_end": true,
-  "delete_segments_after_merge": false,
+  "delete_segments_after_merge": true,
   "captcha_pause_minutes": 30,
   "discord_webhook_url": "",
   "line_channel_token": "",

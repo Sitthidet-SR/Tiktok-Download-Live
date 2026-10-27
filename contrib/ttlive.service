@@ -1,0 +1,21 @@
+# systemd user service: starts the recorder + web UI at boot.
+# Install: see "เปิดเองหลังรีสตาร์ทเครื่อง" in README.md
+[Unit]
+Description=TikTok Live Recorder (web UI on port 8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/TikTok-Download-Live
+ExecStart=/usr/bin/python3 -m ttlive web --port 8080
+Restart=on-failure
+RestartSec=30
+# Give ffmpeg time to close the last file and merge the clip on shutdown
+KillSignal=SIGTERM
+TimeoutStopSec=300
+StandardOutput=append:%h/TikTok-Download-Live/ttlive.log
+StandardError=append:%h/TikTok-Download-Live/ttlive.log
+Nice=5
+
+[Install]
+WantedBy=default.target

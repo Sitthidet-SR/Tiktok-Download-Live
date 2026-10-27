@@ -35,7 +35,7 @@ class Config:
     # Wait between checks while waiting for the live to come back (seconds, capped at 30)
     reconnect_delays: list = field(default_factory=lambda: [5, 10, 20, 30])
     merge_on_end: bool = True
-    delete_segments_after_merge: bool = False
+    delete_segments_after_merge: bool = True  # only after the merged file is verified
     captcha_pause_minutes: int = 30
     user_agent: str = DEFAULT_UA
     ffmpeg: str = "ffmpeg"
