@@ -12,9 +12,9 @@ from .merge import merge_session
 log = logging.getLogger(__name__)
 
 
-def build_ffmpeg_cmd(cfg, url, session_dir, username):
+def build_ffmpeg_cmd(cfg, url, session_dir, username, run=1):
     headers = f"User-Agent: {cfg.user_agent}\r\nReferer: https://www.tiktok.com/\r\n"
-    pattern = os.path.join(session_dir, f"{username}_%Y%m%d_%H%M%S.ts")
+    pattern = os.path.join(session_dir, f"{username}_%Y%m%d_%H%M%S_r{run:03d}.ts")
     return [
         cfg.ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin",
         "-headers", headers,
@@ -34,6 +34,7 @@ class Recorder(threading.Thread):
         self.username, self.room_id = username, room_id
         self._stop_event = threading.Event()
         self._proc = None
+        self._runs = 0
         stamp = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = os.path.join(cfg.path(cfg.output_dir), username, f"{username}_{stamp}")
 
@@ -100,7 +101,9 @@ class Recorder(threading.Thread):
             return True
 
     def _run_ffmpeg(self, url):
-        cmd = build_ffmpeg_cmd(self.cfg, url, self.session_dir, self.username)
+        # The run number keeps a reconnect in the same second from overwriting a file
+        self._runs += 1
+        cmd = build_ffmpeg_cmd(self.cfg, url, self.session_dir, self.username, self._runs)
         self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         for line in self._proc.stderr:
             line = line.strip()
