@@ -35,6 +35,10 @@ class Recorder(threading.Thread):
         self._stop_event = threading.Event()
         self._proc = None
         self._runs = 0
+        self.started_at = time.time()
+        self.quality = ""
+        self.phase = "starting"  # starting, recording, reconnecting, merging
+        self.output = None  # final .mp4 once merged
         stamp = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = os.path.join(cfg.path(cfg.output_dir), username, f"{username}_{stamp}")
 
@@ -53,11 +57,22 @@ class Recorder(threading.Thread):
         except Exception:
             log.exception("[%s] recorder crashed", self.username)
         if self.cfg.merge_on_end:
-            out = merge_session(self.session_dir, self.cfg.ffmpeg, self.cfg.delete_segments_after_merge)
+            self.phase = "merging"
+            out = self.output = merge_session(self.session_dir, self.cfg.ffmpeg, self.cfg.delete_segments_after_merge)
             if out:
                 self.notifier.send(f"✅ @{self.username} ไลฟ์จบ บันทึกไว้ที่ {out}")
         else:
             self.notifier.send(f"✅ @{self.username} ไลฟ์จบ ไฟล์อยู่ใน {self.session_dir}")
+
+    def bytes_recorded(self):
+        total = 0
+        try:
+            for e in os.scandir(self.session_dir):
+                if e.name.endswith(".ts"):
+                    total += e.stat().st_size
+        except OSError:
+            pass
+        return total
 
     def _record_loop(self):
         delays = self.cfg.reconnect_delays
@@ -67,6 +82,7 @@ class Recorder(threading.Thread):
             try:
                 url, quality = self.api.stream_url(self.room_id, self.cfg.stream_preference)
                 log.info("[%s] stream quality %s", self.username, quality)
+                self.quality, self.phase = quality, "recording"
                 self._run_ffmpeg(url)
             except CaptchaRequired as e:
                 self.notifier.send(f"⚠️ @{self.username}: {e}")
@@ -86,6 +102,7 @@ class Recorder(threading.Thread):
                 return
             delay = delays[attempt]
             attempt += 1
+            self.phase = "reconnecting"
             log.info("[%s] stream dropped, still live; reconnecting in %ss (%d/%d)",
                      self.username, delay, attempt, len(delays))
             if self._stop_event.wait(delay):

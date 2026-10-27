@@ -258,5 +258,100 @@ class RecordAndMergeTests(Base):
         self.assertIsNone(merge_session(d))
 
 
+class WebTests(Base):
+    """Drive the web API with a Monitor whose TikTok calls are faked."""
+
+    def setUp(self):
+        super().setUp()
+        import urllib.request
+        from ttlive.config import Config
+        from ttlive.monitor import Monitor
+        from ttlive.notifier import Notifier
+        from ttlive.web import serve
+        self.urllib = urllib.request
+        cfg = Config(channels=["alice"])
+        cfg._base_dir = self.tmp
+        self.saved = []
+        http_client = HttpClient(os.path.join(self.tmp, "missing.txt"), "ua", require_cookies=False)
+
+        class Api:
+            def account_name(self):
+                return "me"
+
+        self.monitor = Monitor(cfg, http_client, Api(), Notifier(cfg), on_channels_changed=self.saved.append)
+        self.server, _ = serve(cfg, http_client, Api(), self.monitor, Notifier(cfg), port=0)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        os.makedirs(os.path.join(self.tmp, "recordings", "alice"))
+        with open(os.path.join(self.tmp, "recordings", "alice", "a.mp4"), "wb") as f:
+            f.write(b"0123456789")
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        super().tearDown()
+
+    def call(self, path, body=None, headers=None):
+        data = None if body is None else json.dumps(body).encode()
+        h = {"Content-Type": "application/json"} if body is not None else {}
+        req = self.urllib.Request(self.base + path, data=data, headers={**h, **(headers or {})})
+        try:
+            with self.urllib.urlopen(req) as r:
+                return r.status, r.read()
+        except self.urllib.HTTPError as e:
+            return e.code, e.read()
+
+    def test_state_starts_without_cookies(self):
+        code, body = self.call("/api/state")
+        st = json.loads(body)
+        self.assertEqual(code, 200)
+        self.assertEqual(st["pause"]["reason"], "no_cookies")
+        self.assertEqual([c["username"] for c in st["channels"]], ["alice"])
+
+    def test_add_pause_remove_channel(self):
+        self.assertEqual(self.call("/api/channels", {"username": "@bob"})[0], 200)
+        self.assertEqual(self.saved[-1], ["alice", "bob"])
+        self.assertEqual(self.call("/api/channels", {"username": "bob"})[0], 400)  # duplicate
+        self.assertEqual(self.call("/api/channels", {"username": "bad name!"})[0], 400)
+        self.assertEqual(self.call("/api/channels/bob/pause", {})[0], 200)
+        self.assertTrue(self.monitor.channels["bob"].paused)
+        self.assertEqual(self.call("/api/channels/bob/remove", {})[0], 200)
+        self.assertEqual(self.saved[-1], ["alice"])
+        self.assertEqual(self.call("/api/channels/nobody/check", {})[0], 404)
+
+    def test_rejects_cross_site_posts(self):
+        code, _ = self.call("/api/channels", {"username": "x"}, {"Origin": "http://evil.example"})
+        self.assertEqual(code, 403)
+        req = self.urllib.Request(self.base + "/api/channels", data=b"username=x",
+                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with self.assertRaises(self.urllib.HTTPError):
+            self.urllib.urlopen(req)
+
+    def test_cookie_upload(self):
+        self.assertEqual(self.call("/api/cookies", {"text": "junk"})[0], 400)
+        self.assertEqual(self.call("/api/cookies", {"text": COOKIES})[0], 200)
+        path = os.path.join(self.tmp, "missing.txt")
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(self.monitor.http.pause_info()["reason"], "")
+
+    def test_media_range_and_path_safety(self):
+        code, body = self.call("/media/alice/a.mp4", headers={"Range": "bytes=2-4"})
+        self.assertEqual((code, body), (206, b"234"))
+        self.assertIn(self.call("/media/../cookies.txt")[0], (403, 404))
+        self.assertEqual(self.call("/media/alice/%2e%2e/%2e%2e/cookies.txt")[0], 403)
+        items = json.loads(self.call("/api/recordings")[1])["items"]
+        self.assertEqual([i["path"] for i in items], ["alice/a.mp4"])
+
+    def test_token_required_off_localhost(self):
+        handler = self.server.RequestHandlerClass
+        handler.app.token = "secret"
+        try:
+            self.assertEqual(self.call("/api/state")[0], 401)
+            self.assertEqual(self.call("/api/state?token=secret")[0], 200)
+            self.assertEqual(self.call("/api/state", headers={"Cookie": "ttlive_token=secret"})[0], 200)
+        finally:
+            handler.app.token = None
+
+
 if __name__ == "__main__":
     unittest.main()

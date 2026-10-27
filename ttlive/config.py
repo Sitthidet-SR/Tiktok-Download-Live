@@ -43,7 +43,7 @@ class Config:
         return p if os.path.isabs(p) else os.path.join(self._base_dir, p)
 
 
-def load_config(path):
+def load_config(path, allow_empty=False):
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     known = set(Config.__dataclass_fields__)
@@ -53,8 +53,8 @@ def load_config(path):
     raw = {k: v for k, v in raw.items() if not k.startswith("_")}
 
     channels = [str(c).strip().lstrip("@") for c in raw.get("channels", []) if str(c).strip()]
-    if not channels:
-        raise ValueError("config 'channels' is empty: add at least one TikTok username")
+    if not channels and not allow_empty:
+        raise ValueError("config 'channels' is empty: add at least one TikTok username (or use the web UI)")
     raw["channels"] = channels
 
     cfg = Config(**raw)

@@ -57,7 +57,8 @@ def load_cookies(path):
 
 
 class HttpClient:
-    def __init__(self, cookies_file, user_agent, min_gap=3.0, captcha_pause_minutes=30):
+    def __init__(self, cookies_file, user_agent, min_gap=3.0, captcha_pause_minutes=30,
+                 require_cookies=True):
         self.cookies_file = cookies_file
         self.user_agent = user_agent
         self.min_gap = min_gap
@@ -69,7 +70,15 @@ class HttpClient:
         self._backoff_step = 0
         self._cookie_mtime = 0.0
         self.jar = None
-        self.reload_cookies()
+        try:
+            self.reload_cookies()
+        except CookieError as e:
+            if require_cookies:
+                raise
+            # The web UI can start without cookies; nothing is sent until they are uploaded
+            log.warning("%s", e)
+            self._paused_until = float("inf")
+            self._pause_reason = "no_cookies"
 
     def reload_cookies(self):
         self.jar = load_cookies(self.cookies_file)
@@ -88,12 +97,40 @@ class HttpClient:
         """Return seconds left in a pause (0 if not paused). A CAPTCHA pause
         ends early once the user re-exports cookies.txt."""
         left = self._paused_until - time.time()
-        if left > 0 and self._pause_reason == "captcha" and self.cookies_changed():
+        if left > 0 and self._pause_reason in ("captcha", "no_cookies") and self.cookies_changed():
+            try:
+                self.reload_cookies()
+            except CookieError as e:
+                log.warning("%s", e)
+                self._cookie_mtime = os.path.getmtime(self.cookies_file)  # don't retry until it changes again
+                return left
             log.info("cookies.txt changed; reloading and resuming")
-            self.reload_cookies()
             self._paused_until = 0
             return 0
         return max(0.0, left)
+
+    def pause_info(self):
+        left = self.paused()
+        return {"seconds": -1 if left == float("inf") else int(left),
+                "reason": self._pause_reason if left else ""}
+
+    def replace_cookies(self, text):
+        """Validate new cookies.txt content, save it (owner-only) and use it now."""
+        tmp = self.cookies_file + ".new"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        try:
+            load_cookies(tmp)
+        except CookieError:
+            os.remove(tmp)
+            raise
+        os.replace(tmp, self.cookies_file)
+        os.chmod(self.cookies_file, 0o600)
+        with self._lock:
+            self.reload_cookies()
+            if self._pause_reason in ("captcha", "no_cookies"):
+                self._paused_until = 0
 
     def _pause(self, seconds, reason):
         self._paused_until = max(self._paused_until, time.time() + seconds)
@@ -114,6 +151,8 @@ class HttpClient:
         with self._lock:
             left = self.paused()
             if left:
+                if left == float("inf"):
+                    raise RateLimited(f"paused ({self._pause_reason})")
                 raise RateLimited(f"paused for {int(left)}s ({self._pause_reason})")
             wait = self._last_request + self.min_gap - time.time()
             if wait > 0:

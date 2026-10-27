@@ -1,0 +1,303 @@
+"""Local web UI: a small JSON API over the Monitor, plus the static page.
+
+Binds to 127.0.0.1 by default. When bound to another address (to open it
+from a phone on the home network), every request needs an access token
+that is printed at startup.
+"""
+
+import json
+import logging
+import mimetypes
+import os
+import re
+import secrets
+import threading
+import time
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlparse
+
+from .http_client import CookieError
+from .merge import merge_session
+
+log = logging.getLogger(__name__)
+STATIC = os.path.join(os.path.dirname(__file__), "static")
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+class App:
+    """State shared by all request handlers."""
+
+    def __init__(self, cfg, http, api, monitor, notifier, token=None):
+        self.cfg, self.http, self.api, self.monitor, self.notifier = cfg, http, api, monitor, notifier
+        self.token = token
+        self.account = {"state": "checking", "name": None}
+        self.out_dir = os.path.realpath(cfg.path(cfg.output_dir))
+        os.makedirs(self.out_dir, exist_ok=True)
+
+    def refresh_account(self):
+        def work():
+            if self.http.pause_info()["reason"] == "no_cookies":
+                self.account = {"state": "no_cookies", "name": None}
+                return
+            self.account = {"state": "checking", "name": None}
+            try:
+                name = self.api.account_name()
+                self.account = {"state": "ok" if name else "logged_out", "name": name}
+            except Exception as e:  # shown in the UI; never crash the server
+                self.account = {"state": "unknown", "name": None, "error": str(e)}
+        threading.Thread(target=work, daemon=True).start()
+
+    def state(self):
+        return {
+            "now": time.time(),
+            "account": self.account,
+            "pause": self.http.pause_info(),
+            "channels": self.monitor.snapshot(),
+            "events": list(self.notifier.events)[-30:][::-1],
+            "settings": {"check_min": self.cfg.check_interval_min, "check_max": self.cfg.check_interval_max,
+                         "segment_seconds": self.cfg.segment_seconds, "output_dir": self.out_dir},
+        }
+
+    def recordings(self):
+        active = {os.path.realpath(c["recording"]["session_dir"])
+                  for c in self.monitor.snapshot() if c["recording"]}
+        items = []
+        for user in sorted(os.listdir(self.out_dir)):
+            udir = os.path.join(self.out_dir, user)
+            if not os.path.isdir(udir):
+                continue
+            for e in os.scandir(udir):
+                if e.is_file() and e.name.endswith(".mp4"):
+                    st = e.stat()
+                    items.append({"kind": "video", "user": user, "name": e.name,
+                                  "path": f"{user}/{e.name}", "size": st.st_size, "time": st.st_mtime})
+                elif e.is_dir():
+                    segs = [s for s in os.scandir(e.path) if s.name.endswith(".ts")]
+                    # Already merged (segments kept as a backup): the .mp4 row is enough
+                    if not segs or os.path.exists(e.path + ".mp4"):
+                        continue
+                    items.append({"kind": "session", "user": user, "name": e.name,
+                                  "path": f"{user}/{e.name}", "segments": len(segs),
+                                  "size": sum(s.stat().st_size for s in segs),
+                                  "time": max(s.stat().st_mtime for s in segs),
+                                  "active": os.path.realpath(e.path) in active})
+        items.sort(key=lambda i: i["time"], reverse=True)
+        disk = os.statvfs(self.out_dir)
+        return {"items": items, "free": disk.f_bavail * disk.f_frsize}
+
+    def safe_path(self, rel):
+        """Resolve a path under the output folder, refusing anything outside it."""
+        full = os.path.realpath(os.path.join(self.out_dir, rel))
+        if not full.startswith(self.out_dir + os.sep):
+            raise PermissionError(rel)
+        return full
+
+
+class Handler(BaseHTTPRequestHandler):
+    app: App = None
+    server_version = "ttlive"
+
+    def log_message(self, fmt, *args):
+        log.debug("web: " + fmt, *args)
+
+    # ---- plumbing -----------------------------------------------------
+
+    def _send(self, code, body=b"", ctype="application/json; charset=utf-8", headers=None):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        self._send(code, json.dumps(obj, ensure_ascii=False).encode())
+
+    def _error(self, code, msg):
+        self._json({"error": msg}, code)
+
+    def _authorized(self):
+        token = self.app.token
+        if not token:
+            return True
+        q = parse_qs(urlparse(self.path).query).get("token", [""])[0]
+        if secrets.compare_digest(q, token):
+            return True
+        c = SimpleCookie(self.headers.get("Cookie", ""))
+        return "ttlive_token" in c and secrets.compare_digest(c["ttlive_token"].value, token)
+
+    def _same_origin(self):
+        origin = self.headers.get("Origin")
+        return origin is None or urlparse(origin).netloc == self.headers.get("Host")
+
+    def _body(self):
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            raise ValueError("expected JSON")
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 2_000_000:
+            raise ValueError("body too large")
+        return json.loads(self.rfile.read(n) or b"{}")
+
+    # ---- routes ---------------------------------------------------------
+
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_GET(self):
+        url = urlparse(self.path)
+        if not self._authorized():
+            return self._send(401, "ต้องเปิดด้วยลิงก์ที่มี token ที่แสดงตอนเริ่มโปรแกรม".encode(),
+                              "text/plain; charset=utf-8")
+        path = url.path
+        if path in ("/", "/index.html"):
+            headers = {}
+            if self.app.token:
+                headers["Set-Cookie"] = f"ttlive_token={self.app.token}; Path=/; HttpOnly; SameSite=Strict"
+            return self._static("index.html", headers)
+        if path.startswith("/static/"):
+            return self._static(path[len("/static/"):])
+        if path == "/api/state":
+            return self._json(self.app.state())
+        if path == "/api/recordings":
+            return self._json(self.app.recordings())
+        if path.startswith("/media/"):
+            return self._media(unquote(path[len("/media/"):]), download="download" in url.query)
+        self._error(404, "not found")
+
+    def do_POST(self):
+        if not self._authorized() or not self._same_origin():
+            return self._error(403, "forbidden")
+        try:
+            body = self._body()
+        except ValueError as e:
+            return self._error(400, str(e))
+        path = urlparse(self.path).path
+        m = self.app.monitor
+        try:
+            if path == "/api/channels":
+                name = m.add_channel(str(body.get("username", "")))
+                return self._json({"ok": True, "username": name})
+            hit = re.fullmatch(r"/api/channels/([\w.]+)/(pause|resume|check|remove)", path)
+            if hit:
+                user, action = hit.groups()
+                if action == "remove":
+                    m.remove_channel(user)
+                elif action == "check":
+                    m.check_now(user)
+                else:
+                    m.set_paused(user, action == "pause")
+                return self._json({"ok": True})
+            if path == "/api/cookies":
+                try:
+                    self.app.http.replace_cookies(str(body.get("text", "")))
+                except CookieError as e:
+                    log.warning("rejected uploaded cookies: %s", e)
+                    return self._error(400, "ไฟล์นี้ไม่ใช่ cookies.txt แบบ Netscape หรือไม่มี cookie ของ tiktok.com")
+                self.app.refresh_account()
+                return self._json({"ok": True})
+            if path == "/api/merge":
+                full = self.app.safe_path(str(body.get("path", "")))
+                if not os.path.isdir(full):
+                    return self._error(404, "ไม่พบโฟลเดอร์")
+                out = merge_session(full, self.app.cfg.ffmpeg, self.app.cfg.delete_segments_after_merge)
+                if not out:
+                    return self._error(500, "รวมไฟล์ไม่สำเร็จ ดูรายละเอียดใน log")
+                return self._json({"ok": True, "output": os.path.relpath(out, self.app.out_dir)})
+        except KeyError:
+            return self._error(404, "ไม่พบช่องนี้")
+        except (ValueError, CookieError) as e:
+            return self._error(400, str(e))
+        except PermissionError:
+            return self._error(403, "forbidden")
+        self._error(404, "not found")
+
+    def _static(self, name, headers=None):
+        full = os.path.realpath(os.path.join(STATIC, name))
+        if not full.startswith(os.path.realpath(STATIC) + os.sep) or not os.path.isfile(full):
+            return self._error(404, "not found")
+        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+        if ctype.startswith("text/") or ctype.endswith("javascript"):
+            ctype += "; charset=utf-8"
+        with open(full, "rb") as f:
+            self._send(200, f.read(), ctype, headers)
+
+    def _media(self, rel, download=False):
+        try:
+            full = self.app.safe_path(rel)
+        except PermissionError:
+            return self._error(403, "forbidden")
+        if not os.path.isfile(full) or not full.endswith((".mp4", ".ts")):
+            return self._error(404, "not found")
+        size = os.path.getsize(full)
+        start, end = 0, size - 1
+        rng = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
+        if rng and (rng.group(1) or rng.group(2)):
+            if rng.group(1):
+                start = int(rng.group(1))
+                end = int(rng.group(2)) if rng.group(2) else size - 1
+            else:
+                start = max(0, size - int(rng.group(2)))
+            end = min(end, size - 1)
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+        length = end - start + 1
+        self.send_response(206 if rng else 200)
+        self.send_header("Content-Type", "video/mp4" if full.endswith(".mp4") else "video/mp2t")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if rng:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        if download:
+            self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(full)}"')
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with open(full, "rb") as f:
+            f.seek(start)
+            left = length
+            try:
+                while left > 0:
+                    chunk = f.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the browser stopped reading, which is normal for video seeking
+
+
+def lan_ip():
+    """This computer's address on the home network (no packet is sent)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.168.0.1", 9))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def serve(cfg, http, api, monitor, notifier, host="127.0.0.1", port=8080):
+    token = None if host in LOOPBACK else secrets.token_urlsafe(16)
+    app = App(cfg, http, api, monitor, notifier, token)
+    app.refresh_account()
+    handler = type("BoundHandler", (Handler,), {"app": app})
+    server = ThreadingHTTPServer((host, port), handler)
+    server.daemon_threads = True
+    shown = "localhost" if host in LOOPBACK else (lan_ip() if host in ("0.0.0.0", "::") else host)
+    url = f"http://{shown}:{port}/" + (f"?token={token}" if token else "")
+    log.info("web UI: %s", url)
+    if token:
+        log.warning("the UI is reachable from other devices: only share this link with people you trust")
+    return server, url

@@ -1,6 +1,7 @@
 """Command line: python3 -m ttlive {run,check,merge}"""
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -17,12 +18,12 @@ from .tiktok_api import TikTokApi
 log = logging.getLogger("ttlive")
 
 
-def setup(args):
-    cfg = load_config(args.config)
+def setup(args, allow_empty=False):
+    cfg = load_config(args.config, allow_empty)
     if not shutil.which(cfg.ffmpeg):
         sys.exit(f"ffmpeg not found ({cfg.ffmpeg}). Install it: sudo dnf install ffmpeg")
     http = HttpClient(cfg.path(cfg.cookies_file), cfg.user_agent,
-                      cfg.min_request_gap, cfg.captcha_pause_minutes)
+                      cfg.min_request_gap, cfg.captcha_pause_minutes, require_cookies=not allow_empty)
     return cfg, http, TikTokApi(http)
 
 
@@ -52,6 +53,59 @@ def cmd_run(args):
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
     monitor.run()
+
+
+def save_channels(config_path, names):
+    """Write the channel list back to config.json, keeping every other setting."""
+    with open(config_path, encoding="utf-8") as f:
+        raw = json.load(f)
+    raw["channels"] = names
+    tmp = config_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(raw, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, config_path)
+
+
+def save_new_config(config_path):
+    example = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.example.json")
+    with open(example, encoding="utf-8") as f:
+        raw = json.load(f)
+    raw["channels"] = []
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(raw, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.chmod(config_path, 0o600)  # it can hold notification tokens
+
+
+def cmd_web(args):
+    import threading
+    import webbrowser
+    from .web import serve
+
+    if not os.path.exists(args.config):
+        save_new_config(args.config)
+        log.info("created %s; add channels in the web UI", args.config)
+    cfg, http, api = setup(args, allow_empty=True)
+    notifier = Notifier(cfg)
+    monitor = Monitor(cfg, http, api, notifier,
+                      on_channels_changed=lambda names: save_channels(args.config, names))
+    server, url = serve(cfg, http, api, monitor, notifier, args.host, args.port)
+    threading.Thread(target=monitor.run, name="monitor", daemon=True).start()
+
+    def on_signal(signum, _frame):
+        log.info("stopping (finishing current recordings)...")
+        threading.Thread(target=server.shutdown, daemon=True).start()
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    if args.open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    finally:
+        monitor.stop()
+        for r in list(monitor.recorders.values()):
+            r.join(timeout=120)
 
 
 def cmd_check(args):
@@ -96,6 +150,13 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("run", help="watch channels and record when they go live").set_defaults(func=cmd_run)
+
+    w = sub.add_parser("web", help="watch and record, with a web UI to manage channels")
+    w.add_argument("--host", default="127.0.0.1",
+                   help="address to listen on (0.0.0.0 = reachable from your phone on the home network)")
+    w.add_argument("--port", type=int, default=8080)
+    w.add_argument("--open", action="store_true", help="open the UI in your browser")
+    w.set_defaults(func=cmd_web)
 
     c = sub.add_parser("check", help="check cookies and live status once, then exit")
     c.add_argument("users", nargs="*", help="usernames (default: channels from config)")

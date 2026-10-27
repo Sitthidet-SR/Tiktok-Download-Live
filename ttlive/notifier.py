@@ -2,7 +2,9 @@
 
 import json
 import logging
+import time
 import urllib.request
+from collections import deque
 
 log = logging.getLogger(__name__)
 
@@ -12,9 +14,11 @@ class Notifier:
         self.discord = cfg.discord_webhook_url
         self.line_token = cfg.line_channel_token
         self.line_to = cfg.line_to
+        self.events = deque(maxlen=100)  # shown in the web UI
 
     def send(self, text):
         log.warning("NOTIFY: %s", text)
+        self.events.append({"time": time.time(), "text": text})
         if self.discord:
             self._post(self.discord, {"content": text[:1900]})
         if self.line_token and self.line_to:
