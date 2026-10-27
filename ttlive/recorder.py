@@ -88,7 +88,7 @@ class Recorder(threading.Thread):
                 s = self.api.room_stats(self.room_id)
             except CaptchaRequired:
                 return
-            except TikTokError as e:
+            except (TikTokError, OSError, ValueError) as e:  # a dropped connection must not end the stats
                 log.debug("[%s] stats failed: %s", self.username, e)
             else:
                 peak = max(self.stats.get("peak_viewers") or 0, s.get("viewers") or 0)
