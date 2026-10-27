@@ -164,8 +164,10 @@ class ApiParsingTests(unittest.TestCase):
         prof = parse_profile({"user": {"nickname": "PJ", "avatarMedium": "https://a/b.jpg"},
                               "liveRoom": {"title": "hi", "liveRoomStats": {"userCount": 9, "enterCount": 74457}}})
         self.assertEqual(prof, {"nickname": "PJ", "avatar": "https://a/b.jpg", "title": "hi", "viewers": 9})
-        st = parse_stats({"user_count": 120, "like_count": 5000, "stats": {"total_user": 441346}})
-        self.assertEqual(st, {"viewers": 120, "likes": 5000, "total_viewers": 441346})
+        st = parse_stats({"user_count": 120, "like_count": 5000,
+                          "stats": {"total_user": 441346, "gift_uv_count": 37, "fan_ticket": 8120}})
+        self.assertEqual(st, {"viewers": 120, "likes": 5000, "total_viewers": 441346,
+                              "gift_senders": 37, "diamonds": 8120})
 
     def test_empty_room(self):
         self.assertEqual(extract_stream_urls({}), {})

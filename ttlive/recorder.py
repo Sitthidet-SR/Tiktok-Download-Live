@@ -91,6 +91,10 @@ class Recorder(threading.Thread):
             parts.append(f"คนดูสูงสุด {s['peak_viewers']:,}")
         if s.get("likes"):
             parts.append(f"กดใจ {s['likes']:,}")
+        if s.get("gift_senders"):
+            parts.append(f"ส่งของขวัญ {s['gift_senders']:,} คน")
+        if s.get("diamonds"):
+            parts.append(f"เพชร {s['diamonds']:,}")
         return (" · " + " · ".join(parts)) if parts else ""
 
     def bytes_recorded(self):

@@ -120,13 +120,20 @@ def parse_profile(d):
 
 
 def parse_stats(room):
-    """Viewer and like counts from a room/info payload."""
+    """Viewer, like and gift totals from a room/info payload.
+
+    gift_senders = stats.gift_uv_count (unique people who sent gifts) and
+    diamonds = stats.fan_ticket (diamonds received). Both are totals for the
+    whole live; the per-gift list needs the signed chat websocket, which we
+    deliberately don't use."""
     stats = room.get("stats") or {}
     likes = _int(room.get("like_count")) or _int(stats.get("like_count"))
     return {
         "viewers": _int(room.get("user_count")),
         "likes": likes,
         "total_viewers": _int(stats.get("total_user")) or _int(stats.get("enter_count")),
+        "gift_senders": _int(stats.get("gift_uv_count")),
+        "diamonds": _int(stats.get("fan_ticket")),
     }
 
 

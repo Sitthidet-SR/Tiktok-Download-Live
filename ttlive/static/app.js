@@ -16,6 +16,8 @@ const ICON = {
   eye: '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
   heart: '<svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"/></svg>',
   users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/></svg>',
+  gift: '<svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="5" rx="1"/><path d="M5 13v7h14v-7M12 8v12M12 8S10.5 3 8 4s0 4 4 4Zm0 0s1.5-5 4-4 0 4-4 4Z"/></svg>',
+  gem: '<svg viewBox="0 0 24 24"><path d="M6 3h12l4 6-10 12L2 9z"/><path d="M2 9h20M12 21 8 9l4-6 4 6z"/></svg>',
   warn: '<svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
 };
 
@@ -202,6 +204,10 @@ function renderChannels() {
           <div title="คนดูตอนนี้${st.peak_viewers ? ` · สูงสุด ${st.peak_viewers.toLocaleString()}` : ""}">${ICON.eye}<b>${fmtNum(viewers)}</b><span>คนดู</span></div>
           <div class="likes" title="${st.likes != null ? st.likes.toLocaleString() : ""}">${ICON.heart}<b>${fmtNum(st.likes)}</b><span>กดใจ</span></div>
           <div title="คนเข้าดูทั้งหมด">${ICON.users}<b>${fmtNum(st.total_viewers)}</b><span>เข้าดูทั้งหมด</span></div>
+        </div>
+        <div class="gift-row">
+          <span title="จำนวนคนที่ส่งของขวัญ (รวมทั้งไลฟ์)">${ICON.gift}<b>${fmtNum(st.gift_senders)}</b> คนส่ง</span>
+          <span title="${st.diamonds != null ? st.diamonds.toLocaleString() + " เพชร" : ""}">${ICON.gem}<b>${fmtNum(st.diamonds)}</b> เพชร</span>
         </div>
         <div class="rec-info">
         <div><span>เวลา</span><b data-since="${r.started_at}">${fmtClock(now() - r.started_at)}</b></div>
