@@ -92,12 +92,11 @@ class TikTokApi:
         candidates = extract_stream_urls(room)
         if not candidates:
             raise TikTokError("live room has no stream URL (age/region restricted, or the API changed)")
-        log.info("room %s offers: %s", room_id, ", ".join(candidates))
-        for q in preference:
-            if q in candidates:
-                return candidates[q], q
-        video = [q for q in candidates if q != "ao"] or list(candidates)
-        return candidates[video[0]], video[0]
+        scores = stream_scores(room)
+        q = pick_best(candidates, scores, preference)
+        log.info("room %s offers: %s -> picked %s", room_id,
+                 ", ".join(f"{n}({describe(scores.get(n))})" if n in scores else n for n in candidates), q)
+        return candidates[q], q
 
 
 def _int(v):
@@ -136,6 +135,64 @@ def parse_stats(room):
         "gift_senders": _int(stats.get("gift_uv_count")),
         "diamonds": _int(stats.get("fan_ticket")),
     }
+
+
+def _sdk_data(room):
+    sdk = (((room.get("stream_url") or {}).get("live_core_sdk_data") or {})
+           .get("pull_data") or {}).get("stream_data")
+    if isinstance(sdk, str) and sdk:
+        try:
+            sdk = json.loads(sdk)
+        except ValueError:
+            return {}
+    return (sdk or {}).get("data") or {} if isinstance(sdk, dict) else {}
+
+
+def stream_scores(room):
+    """{quality: (pixels, video_bitrate)} for the qualities that say how big they are."""
+    scores = {}
+    for name, entry in _sdk_data(room).items():
+        params = ((entry or {}).get("main") or {}).get("sdk_params")
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except ValueError:
+                params = None
+        if not isinstance(params, dict):
+            continue
+        w, _, h = str(params.get("resolution") or "").partition("x")
+        pixels = (_int(w) or 0) * (_int(h) or 0)
+        bitrate = _int(params.get("vbitrate")) or 0
+        if pixels or bitrate:
+            scores[name] = (pixels, bitrate)
+    return scores
+
+
+def describe(score):
+    pixels, bitrate = score
+    side = int(pixels ** 0.5) if pixels else 0
+    parts = []
+    if pixels:
+        parts.append(f"~{side}px")
+    if bitrate:
+        parts.append(f"{bitrate // 1000}kbps")
+    return " ".join(parts)
+
+
+def pick_best(candidates, scores, preference):
+    """Always take the best picture on offer: the streamer's original ("origin")
+    if there is one, else the largest resolution/bitrate TikTok reports, else
+    the first match in the preference list. Never audio-only unless that's all."""
+    video = [q for q in candidates if q != "ao"] or list(candidates)
+    if "origin" in video:
+        return "origin"
+    scored = [q for q in video if q in scores]
+    if scored:
+        return max(scored, key=lambda q: scores[q])
+    for q in preference:
+        if q in video:
+            return q
+    return video[0]
 
 
 def extract_stream_urls(room):

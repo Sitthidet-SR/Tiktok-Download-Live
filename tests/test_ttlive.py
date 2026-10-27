@@ -169,6 +169,24 @@ class ApiParsingTests(unittest.TestCase):
         self.assertEqual(st, {"viewers": 120, "likes": 5000, "total_viewers": 441346,
                               "gift_senders": 37, "diamonds": 8120})
 
+    def test_picks_best_quality(self):
+        from ttlive.tiktok_api import pick_best, stream_scores
+        def entry(res, kbps):
+            return {"main": {"flv": f"http://x/{res}.flv",
+                             "sdk_params": json.dumps({"resolution": res, "vbitrate": kbps * 1000})}}
+        sdk = {"data": {"ld": entry("360x640", 500), "uhd": entry("1080x1920", 4000),
+                        "hd": entry("720x1280", 2000), "ao": {"main": {"flv": "http://x/ao.flv"}}}}
+        room = {"stream_url": {"live_core_sdk_data": {"pull_data": {"stream_data": json.dumps(sdk)}},
+                               "flv_pull_url": {"HD1": "http://x/hd1.flv", "SD1": "http://x/sd1.flv"}}}
+        cands = extract_stream_urls(room)
+        pref = ["origin", "uhd", "FULL_HD1", "hd", "HD1", "sd", "SD1", "ld", "SD2"]
+        self.assertEqual(pick_best(cands, stream_scores(room), pref), "uhd")
+        # a preference order that would pick worse still loses to the measured best
+        self.assertEqual(pick_best(cands, stream_scores(room), ["ld", "hd"]), "uhd")
+        self.assertEqual(pick_best({**cands, "origin": "http://x/o.flv"}, stream_scores(room), pref), "origin")
+        # no size info: fall back to the preference order, never audio-only
+        self.assertEqual(pick_best({"ao": "a", "SD1": "s", "HD1": "h"}, {}, pref), "HD1")
+
     def test_empty_room(self):
         self.assertEqual(extract_stream_urls({}), {})
 
