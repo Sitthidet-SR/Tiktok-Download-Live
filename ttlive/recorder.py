@@ -61,13 +61,24 @@ class Recorder(threading.Thread):
             log.exception("[%s] recorder crashed", self.username)
         self._finished = True
         summary = self._stats_summary()
+        why = "หยุดบันทึกแล้ว" if self._stop_event.is_set() else "ไลฟ์จบ"
         if self.cfg.merge_on_end:
             self.phase = "merging"
             out = self.output = merge_session(self.session_dir, self.cfg.ffmpeg, self.cfg.delete_segments_after_merge)
             if out:
-                self.notifier.send(f"✅ @{self.username} ไลฟ์จบ บันทึกไว้ที่ {out}{summary}")
+                self.notifier.send(f"✅ @{self.username} {why} บันทึกไว้ที่ {out}{summary}")
+            elif self.bytes_recorded():
+                self.notifier.send(f"⚠️ @{self.username} {why} แต่รวมไฟล์เป็น MP4 ไม่สำเร็จ "
+                                   f"ไฟล์ย่อยยังอยู่ครบใน {self.session_dir} (กดรวมใหม่ได้ในหน้าเว็บ){summary}")
+            else:
+                self.notifier.send(f"⚠️ @{self.username} {why} แต่ไม่ได้ข้อมูลวิดีโอเลย "
+                                   "(ไลฟ์อาจจำกัดอายุ/ประเทศ หรือ cookie หมดอายุ)")
+                try:
+                    os.rmdir(self.session_dir)
+                except OSError:
+                    pass
         else:
-            self.notifier.send(f"✅ @{self.username} ไลฟ์จบ ไฟล์อยู่ใน {self.session_dir}{summary}")
+            self.notifier.send(f"✅ @{self.username} {why} ไฟล์อยู่ใน {self.session_dir}{summary}")
 
     def _stats_loop(self):
         """Refresh viewer/like counts through the shared, rate-limited client."""

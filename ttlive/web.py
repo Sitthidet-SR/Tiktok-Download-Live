@@ -35,6 +35,14 @@ class App:
         self.out_dir = os.path.realpath(cfg.path(cfg.output_dir))
         os.makedirs(self.out_dir, exist_ok=True)
 
+    def watch_account(self, every=6 * 3600):
+        """Re-check the login now and then, so expired cookies show up in the UI."""
+        def loop():
+            while True:
+                time.sleep(every)
+                self.refresh_account()
+        threading.Thread(target=loop, name="account-check", daemon=True).start()
+
     def refresh_account(self):
         def work():
             if self.http.pause_info()["reason"] == "no_cookies":
@@ -292,6 +300,7 @@ def serve(cfg, http, api, monitor, notifier, host="127.0.0.1", port=8080):
     token = None if host in LOOPBACK else secrets.token_urlsafe(16)
     app = App(cfg, http, api, monitor, notifier, token)
     app.refresh_account()
+    app.watch_account()
     handler = type("BoundHandler", (Handler,), {"app": app})
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True

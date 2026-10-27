@@ -5,6 +5,7 @@ pauses channels), so all channel state sits behind one lock.
 """
 
 import logging
+import os
 import random
 import threading
 import time
@@ -14,6 +15,10 @@ from .http_client import CaptchaRequired, RateLimited, TikTokError
 from .recorder import Recorder
 
 log = logging.getLogger(__name__)
+
+LOW_DISK = 5 * 1024**3       # warn below this much free space
+FULL_DISK = 1 * 1024**3      # don't start new recordings below this
+RECHECK_AFTER_END = 30       # a streamer who restarts gets a new room; look again soon
 
 
 @dataclass
@@ -37,6 +42,9 @@ class Monitor:
         self.lock = threading.RLock()
         self._stop = threading.Event()
         self._captcha_notified = False
+        self._disk_checked = 0.0
+        self._disk_warned = False
+        self.disk_free = None
         now = time.time()
         # Spread the first checks out so channels are not all checked at once
         for i, u in enumerate(cfg.channels):
@@ -130,6 +138,7 @@ class Monitor:
         log.info("watching %d channel(s): %s", len(self.channels), ", ".join(self.channels))
         while not self._stop.is_set():
             self._reap()
+            self._check_disk()
             left = self.http.paused()
             if left:
                 self._stop.wait(min(left, 5))
@@ -187,6 +196,10 @@ class Monitor:
             if not result.is_live:
                 log.info("[%s] offline", username)
                 return
+            if self.disk_free is not None and self.disk_free < FULL_DISK:
+                st.error = "พื้นที่ดิสก์เหลือน้อยกว่า 1 GB จึงไม่เริ่มบันทึก"
+                log.error("[%s] is live but the disk is almost full; not recording", username)
+                return
             rec = Recorder(self.cfg, self.api, self.notifier, username, result.room_id)
             self.recorders[username] = rec
         rec.start()
@@ -198,6 +211,23 @@ class Monitor:
                     del self.recorders[u]
                     st = self.channels.get(u)
                     if st:
-                        # The room just ended; look again after a normal interval
                         st.status = "offline"
-                        st.next_check = time.time() + self.interval()
+                        st.next_check = time.time() + RECHECK_AFTER_END
+
+    def _check_disk(self):
+        if time.time() - self._disk_checked < 60:
+            return
+        self._disk_checked = time.time()
+        path = self.cfg.path(self.cfg.output_dir)
+        try:
+            os.makedirs(path, exist_ok=True)
+            st = os.statvfs(path)
+        except OSError:
+            return
+        self.disk_free = st.f_bavail * st.f_frsize
+        if self.disk_free < LOW_DISK and not self._disk_warned:
+            self._disk_warned = True
+            self.notifier.send(f"⚠️ พื้นที่ดิสก์เหลือ {self.disk_free / 1024**3:.1f} GB "
+                               "ถ้าต่ำกว่า 1 GB จะไม่เริ่มบันทึกไลฟ์ใหม่")
+        elif self.disk_free > LOW_DISK * 1.2:
+            self._disk_warned = False
