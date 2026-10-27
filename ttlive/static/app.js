@@ -13,6 +13,9 @@ const ICON = {
   film: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M10 9.5v5l4-2.5z"/></svg>',
   layers: '<svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>',
   merge: '<svg viewBox="0 0 24 24"><path d="M6 3v6a6 6 0 0 0 6 6h0a6 6 0 0 1 6 6M18 3v6a6 6 0 0 1-3 5.2"/></svg>',
+  eye: '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  heart: '<svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"/></svg>',
+  users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/></svg>',
   warn: '<svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
 };
 
@@ -33,6 +36,9 @@ function fmtBytes(n) {
   const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
   return (n / 1024 ** i).toFixed(i >= 3 ? 2 : i ? 1 : 0) + " " + u[i];
 }
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const fmtNum = (n) => (n === null || n === undefined ? "–" : compact.format(n));
+
 function fmtClock(sec) {
   sec = Math.max(0, Math.floor(sec));
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -162,6 +168,22 @@ function channelBadge(c) {
   return '<span class="badge badge-wait"><i></i>รอเช็ก</span>';
 }
 
+// Cards re-render every poll, so only draw an avatar once the browser has it cached
+const avatarCache = {};
+function avatarImg(url) {
+  if (!url) return "";
+  if (avatarCache[url] === "ok") return `<img src="${esc(url)}" alt="" referrerpolicy="no-referrer">`;
+  if (avatarCache[url] === undefined) {
+    avatarCache[url] = "loading";
+    const img = new Image();
+    img.referrerPolicy = "no-referrer";
+    img.onload = () => { avatarCache[url] = "ok"; if (state) renderChannels(); };
+    img.onerror = () => { avatarCache[url] = "error"; };
+    img.src = url;
+  }
+  return "";
+}
+
 function renderChannels() {
   const el = $("#channels");
   const list = [...state.channels].sort((a, b) => (!!b.recording - !!a.recording) || a.username.localeCompare(b.username));
@@ -172,8 +194,16 @@ function renderChannels() {
   el.innerHTML = list.map((c) => {
     const u = esc(c.username), r = c.recording;
     let body;
+    const st = (r && r.stats) || {};
+    const viewers = st.viewers ?? c.viewers;
     if (r) {
-      body = `<div class="rec-info">
+      body = `${c.title ? `<p class="live-title" title="${esc(c.title)}">${esc(c.title)}</p>` : ""}
+        <div class="live-stats">
+          <div title="คนดูตอนนี้${st.peak_viewers ? ` · สูงสุด ${st.peak_viewers.toLocaleString()}` : ""}">${ICON.eye}<b>${fmtNum(viewers)}</b><span>คนดู</span></div>
+          <div class="likes" title="${st.likes != null ? st.likes.toLocaleString() : ""}">${ICON.heart}<b>${fmtNum(st.likes)}</b><span>กดใจ</span></div>
+          <div title="คนเข้าดูทั้งหมด">${ICON.users}<b>${fmtNum(st.total_viewers)}</b><span>เข้าดูทั้งหมด</span></div>
+        </div>
+        <div class="rec-info">
         <div><span>เวลา</span><b data-since="${r.started_at}">${fmtClock(now() - r.started_at)}</b></div>
         <div><span>ขนาด</span><b>${fmtBytes(r.bytes)}</b></div>
         <div><span>คุณภาพ</span><b>${esc(r.quality || "–")}</b></div></div>`;
@@ -194,8 +224,8 @@ function renderChannels() {
         : `<button class="btn btn-sm" data-act="pause" data-user="${u}">${ICON.pause}หยุดเฝ้า</button>`;
     return `<article class="card ${r ? "is-rec" : ""} ${c.paused ? "is-paused" : ""}">
       <div class="card-top">
-        <div class="avatar" style="${avatarStyle(c.username)}">${esc(c.username[0].toUpperCase())}</div>
-        <div class="card-name"><b>@${u}</b><a href="https://www.tiktok.com/@${encodeURIComponent(c.username)}/live" target="_blank" rel="noopener noreferrer">เปิดใน TikTok ↗</a></div>
+        <div class="avatar" style="${avatarStyle(c.username)}">${esc(c.username[0].toUpperCase())}${avatarImg(c.avatar)}</div>
+        <div class="card-name"><b>${esc(c.nickname || "@" + c.username)}</b><a href="https://www.tiktok.com/@${encodeURIComponent(c.username)}/live" target="_blank" rel="noopener noreferrer">${c.nickname ? `@${u} · ` : ""}เปิดใน TikTok ↗</a></div>
         ${channelBadge(c)}
       </div>
       ${body}

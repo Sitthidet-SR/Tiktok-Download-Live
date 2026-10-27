@@ -9,6 +9,7 @@
   "min_request_gap": 3,
 
   "segment_seconds": 1800,
+  "stats_interval": 60,
   "stream_preference": ["origin", "FULL_HD1", "HD1", "SD1", "SD2"],
   "reconnect_delays": [5, 10, 20, 40, 80],
   "merge_on_end": true,

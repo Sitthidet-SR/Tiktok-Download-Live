@@ -22,6 +22,8 @@ class Config:
     # Minimum gap between any two requests to TikTok, across the whole program
     min_request_gap: float = 3.0
     segment_seconds: int = 1800
+    # While recording, refresh viewer/like counts this often (seconds)
+    stats_interval: int = 60
     stream_preference: list = field(default_factory=lambda: ["origin", "FULL_HD1", "HD1", "SD1", "SD2"])
     reconnect_delays: list = field(default_factory=lambda: [5, 10, 20, 40, 80])
     merge_on_end: bool = True
@@ -63,6 +65,8 @@ def load_config(path, allow_empty=False):
         raise ValueError("check_interval_min must be at least 30 seconds (the plan recommends 60-180)")
     if cfg.check_interval_max < cfg.check_interval_min:
         raise ValueError("check_interval_max must be >= check_interval_min")
+    if cfg.stats_interval < 30:
+        raise ValueError("stats_interval must be at least 30 seconds")
     if cfg.min_request_gap < 1:
         raise ValueError("min_request_gap must be at least 1 second")
     return cfg

@@ -8,7 +8,7 @@ import logging
 import random
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .http_client import CaptchaRequired, RateLimited, TikTokError
 from .recorder import Recorder
@@ -25,6 +25,7 @@ class ChannelState:
     next_check: float = 0.0
     error: str = ""
     paused: bool = False
+    profile: dict = field(default_factory=dict)  # nickname, avatar, title, viewers
 
 
 class Monitor:
@@ -105,12 +106,13 @@ class Monitor:
                     "username": st.username, "status": st.status, "paused": st.paused,
                     "room_id": st.room_id, "last_check": st.last_check or None,
                     "next_check": None if st.paused or rec else st.next_check,
-                    "error": st.error, "recording": None,
+                    "error": st.error, "recording": None, **st.profile,
                 }
                 if rec:
                     item["recording"] = {
                         "phase": rec.phase, "started_at": rec.started_at, "quality": rec.quality,
                         "bytes": rec.bytes_recorded(), "session_dir": rec.session_dir,
+                        "stats": rec.stats,
                     }
                 out.append(item)
             return out
@@ -176,6 +178,11 @@ class Monitor:
                 st.status = "error"
                 return
             st.room_id = result.room_id
+            # Keep the last known name/avatar if this check didn't return one
+            st.profile = {**st.profile, **{k: v for k, v in result.profile.items() if v not in ("", None)}}
+            if not result.is_live:
+                st.profile.pop("title", None)
+                st.profile.pop("viewers", None)
             st.status = "live" if result.is_live else "offline"
             if not result.is_live:
                 log.info("[%s] offline", username)

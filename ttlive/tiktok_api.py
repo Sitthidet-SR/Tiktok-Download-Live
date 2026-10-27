@@ -8,7 +8,7 @@ extractor.
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from .http_client import TikTokError
@@ -23,6 +23,7 @@ class RoomStatus:
     username: str
     room_id: str
     is_live: bool
+    profile: dict = field(default_factory=dict)  # nickname, avatar, title, viewers
 
 
 class TikTokApi:
@@ -46,7 +47,7 @@ class TikTokApi:
             status = (d.get("liveRoom") or {}).get("status")
             if data.get("statusCode") not in (0, None) and not room_id:
                 raise TikTokError(f"api-live error {data.get('statusCode')}: {data.get('message', '')}")
-            return RoomStatus(username, room_id, bool(room_id) and status == LIVE_STATUS)
+            return RoomStatus(username, room_id, bool(room_id) and status == LIVE_STATUS, parse_profile(d))
         except TikTokError as e:
             if "expected JSON" not in str(e):
                 raise
@@ -74,11 +75,18 @@ class TikTokApi:
             out[rid] = bool(item.get("alive"))
         return out
 
-    def stream_url(self, room_id, preference):
-        """Return (url, quality_name) for the best available FLV stream, else HLS."""
+    def room_info(self, room_id):
         data = self.http.get_json(
             f"https://webcast.tiktok.com/webcast/room/info/?aid=1988&room_id={room_id}")
-        room = data.get("data") or {}
+        return data.get("data") or {}
+
+    def room_stats(self, room_id):
+        """Current viewers, likes and total viewers of a live room."""
+        return parse_stats(self.room_info(room_id))
+
+    def stream_url(self, room_id, preference):
+        """Return (url, quality_name) for the best available FLV stream, else HLS."""
+        room = self.room_info(room_id)
         if room.get("status") not in (None, LIVE_STATUS):
             raise TikTokError(f"room {room_id} is not live (status {room.get('status')})")
         candidates = extract_stream_urls(room)
@@ -89,6 +97,37 @@ class TikTokApi:
                 return candidates[q], q
         q = next(iter(candidates))
         return candidates[q], q
+
+
+def _int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_profile(d):
+    """Name, avatar and live title from an api-live/user/room payload."""
+    user = d.get("user") or {}
+    room = d.get("liveRoom") or {}
+    stats = room.get("liveRoomStats") or {}
+    return {
+        "nickname": user.get("nickname") or "",
+        "avatar": user.get("avatarMedium") or user.get("avatarThumb") or user.get("avatarLarger") or "",
+        "title": room.get("title") or "",
+        "viewers": _int(stats.get("userCount")),
+    }
+
+
+def parse_stats(room):
+    """Viewer and like counts from a room/info payload."""
+    stats = room.get("stats") or {}
+    likes = _int(room.get("like_count")) or _int(stats.get("like_count"))
+    return {
+        "viewers": _int(room.get("user_count")),
+        "likes": likes,
+        "total_viewers": _int(stats.get("total_user")) or _int(stats.get("enter_count")),
+    }
 
 
 def extract_stream_urls(room):

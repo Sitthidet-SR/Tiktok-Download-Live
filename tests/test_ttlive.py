@@ -159,6 +159,14 @@ class ApiParsingTests(unittest.TestCase):
         self.assertEqual(got["FULL_HD1"], "http://x/fhd.flv")
         self.assertEqual(got["hls"], "http://x/live.m3u8")
 
+    def test_profile_and_stats(self):
+        from ttlive.tiktok_api import parse_profile, parse_stats
+        prof = parse_profile({"user": {"nickname": "PJ", "avatarMedium": "https://a/b.jpg"},
+                              "liveRoom": {"title": "hi", "liveRoomStats": {"userCount": 9, "enterCount": 74457}}})
+        self.assertEqual(prof, {"nickname": "PJ", "avatar": "https://a/b.jpg", "title": "hi", "viewers": 9})
+        st = parse_stats({"user_count": 120, "like_count": 5000, "stats": {"total_user": 441346}})
+        self.assertEqual(st, {"viewers": 120, "likes": 5000, "total_viewers": 441346})
+
     def test_empty_room(self):
         self.assertEqual(extract_stream_urls({}), {})
 
@@ -213,6 +221,9 @@ class RecordAndMergeTests(Base):
                 FakeApi.calls += 1
                 return base + "/live.flv", "origin"
 
+            def room_stats(self, room_id):
+                return {"viewers": 120, "likes": 3400, "total_viewers": 900}
+
             def check_alive(self, ids):
                 return {ids[0]: FakeApi.alive.pop(0)}
 
@@ -221,6 +232,7 @@ class RecordAndMergeTests(Base):
             ffmpeg = "ffmpeg"
             segment_seconds = 2
             stream_preference = ["origin"]
+            stats_interval = 30
             reconnect_delays = [0, 0]
             merge_on_end = True
             delete_segments_after_merge = True

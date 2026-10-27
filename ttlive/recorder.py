@@ -35,10 +35,12 @@ class Recorder(threading.Thread):
         self._stop_event = threading.Event()
         self._proc = None
         self._runs = 0
+        self._finished = False
         self.started_at = time.time()
         self.quality = ""
         self.phase = "starting"  # starting, recording, reconnecting, merging
         self.output = None  # final .mp4 once merged
+        self.stats = {}  # viewers, likes, total_viewers, peak_viewers, updated
         stamp = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = os.path.join(cfg.path(cfg.output_dir), username, f"{username}_{stamp}")
 
@@ -50,19 +52,46 @@ class Recorder(threading.Thread):
 
     def run(self):
         os.makedirs(self.session_dir, exist_ok=True)
+        threading.Thread(target=self._stats_loop, name=f"stats-{self.username}", daemon=True).start()
         log.info("[%s] live! recording to %s", self.username, self.session_dir)
         self.notifier.send(f"🔴 @{self.username} เริ่มไลฟ์แล้ว กำลังบันทึก")
         try:
             self._record_loop()
         except Exception:
             log.exception("[%s] recorder crashed", self.username)
+        self._finished = True
+        summary = self._stats_summary()
         if self.cfg.merge_on_end:
             self.phase = "merging"
             out = self.output = merge_session(self.session_dir, self.cfg.ffmpeg, self.cfg.delete_segments_after_merge)
             if out:
-                self.notifier.send(f"✅ @{self.username} ไลฟ์จบ บันทึกไว้ที่ {out}")
+                self.notifier.send(f"✅ @{self.username} ไลฟ์จบ บันทึกไว้ที่ {out}{summary}")
         else:
-            self.notifier.send(f"✅ @{self.username} ไลฟ์จบ ไฟล์อยู่ใน {self.session_dir}")
+            self.notifier.send(f"✅ @{self.username} ไลฟ์จบ ไฟล์อยู่ใน {self.session_dir}{summary}")
+
+    def _stats_loop(self):
+        """Refresh viewer/like counts through the shared, rate-limited client."""
+        while not self._stop_event.is_set() and not self._finished:
+            try:
+                s = self.api.room_stats(self.room_id)
+            except CaptchaRequired:
+                return
+            except TikTokError as e:
+                log.debug("[%s] stats failed: %s", self.username, e)
+            else:
+                peak = max(self.stats.get("peak_viewers") or 0, s.get("viewers") or 0)
+                self.stats = {**s, "peak_viewers": peak, "updated": time.time()}
+            if self._stop_event.wait(self.cfg.stats_interval):
+                return
+
+    def _stats_summary(self):
+        s = self.stats
+        parts = []
+        if s.get("peak_viewers"):
+            parts.append(f"คนดูสูงสุด {s['peak_viewers']:,}")
+        if s.get("likes"):
+            parts.append(f"กดใจ {s['likes']:,}")
+        return (" · " + " · ".join(parts)) if parts else ""
 
     def bytes_recorded(self):
         total = 0
