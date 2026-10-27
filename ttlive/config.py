@@ -13,6 +13,7 @@ DEFAULT_UA = (
 @dataclass
 class Config:
     channels: list
+    paused_channels: list = field(default_factory=list)  # set from the web UI
     cookies_file: str = "cookies.txt"
     output_dir: str = "recordings"
     # Seconds between status checks for each channel (a random value in this range, then +/- jitter)

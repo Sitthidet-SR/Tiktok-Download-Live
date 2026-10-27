@@ -48,7 +48,8 @@ class Monitor:
         now = time.time()
         # Spread the first checks out so channels are not all checked at once
         for i, u in enumerate(cfg.channels):
-            self.channels[u] = ChannelState(u, next_check=now + i * cfg.min_request_gap)
+            self.channels[u] = ChannelState(u, next_check=now + i * cfg.min_request_gap,
+                                            paused=u in cfg.paused_channels)
 
     def interval(self):
         base = random.uniform(self.cfg.check_interval_min, self.cfg.check_interval_max)
@@ -89,19 +90,23 @@ class Monitor:
             rec = self.recorders.get(username) if paused else None
         if rec:
             rec.stop()
+        self._channels_changed()
 
     def check_now(self, username):
         with self.lock:
             st = self.channels[username]
-            st.paused = False
+            was_paused, st.paused = st.paused, False
             st.next_check = time.time()
+        if was_paused:
+            self._channels_changed()
 
     def _channels_changed(self):
         if self.on_channels_changed:
             with self.lock:
                 names = list(self.channels)
+                paused = [u for u, st in self.channels.items() if st.paused]
             try:
-                self.on_channels_changed(names)
+                self.on_channels_changed(names, paused)
             except Exception:
                 log.exception("could not save channel list")
 

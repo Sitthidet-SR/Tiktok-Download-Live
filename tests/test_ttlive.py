@@ -331,7 +331,8 @@ class WebTests(Base):
             def account_name(self):
                 return "me"
 
-        self.monitor = Monitor(cfg, http_client, Api(), Notifier(cfg), on_channels_changed=self.saved.append)
+        self.monitor = Monitor(cfg, http_client, Api(), Notifier(cfg),
+                               on_channels_changed=lambda names, paused: self.saved.append((names, paused)))
         self.server, _ = serve(cfg, http_client, Api(), self.monitor, Notifier(cfg), port=0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -363,13 +364,14 @@ class WebTests(Base):
 
     def test_add_pause_remove_channel(self):
         self.assertEqual(self.call("/api/channels", {"username": "@bob"})[0], 200)
-        self.assertEqual(self.saved[-1], ["alice", "bob"])
+        self.assertEqual(self.saved[-1], (["alice", "bob"], []))
         self.assertEqual(self.call("/api/channels", {"username": "bob"})[0], 400)  # duplicate
         self.assertEqual(self.call("/api/channels", {"username": "bad name!"})[0], 400)
         self.assertEqual(self.call("/api/channels/bob/pause", {})[0], 200)
         self.assertTrue(self.monitor.channels["bob"].paused)
+        self.assertEqual(self.saved[-1], (["alice", "bob"], ["bob"]))  # pause survives a restart
         self.assertEqual(self.call("/api/channels/bob/remove", {})[0], 200)
-        self.assertEqual(self.saved[-1], ["alice"])
+        self.assertEqual(self.saved[-1], (["alice"], []))
         self.assertEqual(self.call("/api/channels/nobody/check", {})[0], 404)
 
     def test_rejects_cross_site_posts(self):

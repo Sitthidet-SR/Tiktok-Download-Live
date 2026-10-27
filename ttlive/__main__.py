@@ -55,11 +55,12 @@ def cmd_run(args):
     monitor.run()
 
 
-def save_channels(config_path, names):
-    """Write the channel list back to config.json, keeping every other setting."""
+def save_channels(config_path, names, paused=()):
+    """Write the channel list (and which are paused) back to config.json, keeping every other setting."""
     with open(config_path, encoding="utf-8") as f:
         raw = json.load(f)
     raw["channels"] = names
+    raw["paused_channels"] = list(paused)
     tmp = config_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(raw, f, ensure_ascii=False, indent=2)
@@ -89,7 +90,7 @@ def cmd_web(args):
     cfg, http, api = setup(args, allow_empty=True)
     notifier = Notifier(cfg)
     monitor = Monitor(cfg, http, api, notifier,
-                      on_channels_changed=lambda names: save_channels(args.config, names))
+                      on_channels_changed=lambda names, paused: save_channels(args.config, names, paused))
     server, url = serve(cfg, http, api, monitor, notifier, args.host, args.port)
     threading.Thread(target=monitor.run, name="monitor", daemon=True).start()
 
