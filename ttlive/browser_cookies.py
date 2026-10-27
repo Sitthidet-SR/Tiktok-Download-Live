@@ -48,6 +48,7 @@ def find_cookie_db(profile="Default"):
 
 
 _password_cache = {}
+_keyring_failed = {}
 
 
 def keyring_password(app="chrome"):
@@ -55,6 +56,9 @@ def keyring_password(app="chrome"):
     keyring is not asked again (and can't pop up unlock prompts repeatedly)."""
     if app in _password_cache:
         return _password_cache[app]
+    # A locked wallet may show an unlock prompt; don't ask more than every 10 minutes
+    if time.time() - _keyring_failed.get(app, 0) < 600:
+        raise BrowserCookieError("the wallet/keyring was not available a moment ago; will retry later")
     folder = "Chrome Keys" if app == "chrome" else "Chromium Keys"
     label = "Chrome Safe Storage" if app == "chrome" else "Chromium Safe Storage"
     attempts = [
@@ -74,6 +78,7 @@ def keyring_password(app="chrome"):
         if r.returncode == 0 and secret and " " not in secret:
             _password_cache[app] = secret
             return secret
+    _keyring_failed[app] = time.time()
     raise BrowserCookieError("could not read 'Chrome Safe Storage' from KWallet or the keyring "
                              "(is the wallet unlocked?)")
 

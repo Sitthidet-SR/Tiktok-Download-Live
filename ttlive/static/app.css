@@ -79,7 +79,7 @@ main { position: relative; z-index: 1; max-width: 1240px; margin: 0 auto; paddin
 .pill-warn { color: var(--amber); border-color: rgba(251, 191, 36, 0.3); }
 .pill-warn .dot { background: var(--amber); }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); font-weight: 600; font-size: 14px; cursor: pointer; transition: transform 0.12s, background 0.2s, border-color 0.2s, opacity 0.2s; white-space: nowrap; }
+.btn { text-decoration: none; color: inherit; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); font-weight: 600; font-size: 14px; cursor: pointer; transition: transform 0.12s, background 0.2s, border-color 0.2s, opacity 0.2s; white-space: nowrap; }
 .btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
 .btn:active { transform: scale(0.97); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
