@@ -2,9 +2,11 @@
 # Install the recorder as a system service on Ubuntu Server (22.04 or newer).
 # Run it on the VPS from inside the program folder, as your normal SSH user:
 #   bash deploy/install-ubuntu.sh                      # recorder only (UI on 127.0.0.1:8080)
+#   bash deploy/install-ubuntu.sh --quick-tunnel     # free Cloudflare link, no domain needed
 #   bash deploy/install-ubuntu.sh --cloudflare https://rec.example.com
-# With --cloudflare it also installs cloudflared and asks for the tunnel token
-# (hidden input, never written to shell history).
+# --quick-tunnel runs a free Cloudflare Quick Tunnel: a random https://….trycloudflare.com
+# address that changes whenever the server restarts (bash deploy/show-link.sh prints it).
+# --cloudflare uses your own domain and asks for the tunnel token (hidden input).
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,10 +14,12 @@ RUN_USER="$(id -un)"
 PORT=8080
 PUBLIC_URL=""
 CLOUDFLARE=0
+QUICK=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --cloudflare) CLOUDFLARE=1; PUBLIC_URL="${2:-}"; shift ;;
+    --quick-tunnel) QUICK=1; PUBLIC_URL="trycloudflare" ;;
     --port) PORT="$2"; shift ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
@@ -82,7 +86,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable ttlive
 sudo systemctl restart ttlive
 
-if [ "$CLOUDFLARE" = 1 ]; then
+install_cloudflared() {
   echo "==> ติดตั้ง cloudflared"
   if ! command -v cloudflared >/dev/null; then
     sudo mkdir -p --mode=0755 /usr/share/keyrings
@@ -92,6 +96,32 @@ if [ "$CLOUDFLARE" = 1 ]; then
     sudo apt-get update -q
     sudo apt-get install -y -q cloudflared
   fi
+}
+
+if [ "$QUICK" = 1 ]; then
+  install_cloudflared
+  sudo tee /etc/systemd/system/ttlive-tunnel.service >/dev/null <<UNIT
+[Unit]
+Description=Free Cloudflare Quick Tunnel to the TikTok recorder UI
+After=network-online.target ttlive.service
+Wants=network-online.target
+
+[Service]
+User=$RUN_USER
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:20241 --url http://127.0.0.1:$PORT
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  sudo systemctl daemon-reload
+  sudo systemctl enable ttlive-tunnel
+  sudo systemctl restart ttlive-tunnel
+fi
+
+if [ "$CLOUDFLARE" = 1 ]; then
+  install_cloudflared
   if systemctl is-active --quiet cloudflared; then
     echo "cloudflared รันอยู่แล้ว ข้ามขั้นนี้ (ถ้าจะเปลี่ยน tunnel: sudo cloudflared service uninstall แล้วรันสคริปต์ใหม่)"
   else
@@ -106,6 +136,12 @@ if [ "$CLOUDFLARE" = 1 ]; then
 fi
 
 sleep 3
+if [ "$QUICK" = 1 ]; then
+  echo
+  bash "$APP_DIR/deploy/show-link.sh" || true
+  echo "ดูลิงก์อีกครั้งเมื่อไรก็ได้: bash deploy/show-link.sh"
+  exit 0
+fi
 TOKEN="$(cat "$APP_DIR/.web_token" 2>/dev/null || true)"
 echo
 systemctl --no-pager --lines=0 status ttlive || true

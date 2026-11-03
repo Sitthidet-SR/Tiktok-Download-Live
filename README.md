@@ -50,6 +50,18 @@ python3 -m ttlive web --open
 
 บน VPS ไม่มี Chrome จึงใช้ `cookies.txt` ที่อัปโหลดผ่านหน้าเว็บ (ล็อกอิน TikTok ใน Chrome บนคอม แล้ว export ด้วยส่วนขยาย "Get cookies.txt LOCALLY") หน้าเว็บฟังแค่ `127.0.0.1:8080` ไม่เปิดพอร์ตออกเน็ต เข้าจากข้างนอกผ่าน Cloudflare Tunnel และต้องมี token เสมอ (คำขอที่มาทาง tunnel/proxy จะไม่ถูกนับว่าเป็น "เครื่องตัวเอง")
 
+**แบบฟรี ไม่ต้องมีโดเมน (Quick Tunnel)**
+
+```bash
+sudo apt update && sudo apt install -y git
+git clone https://github.com/Sitthidet-SR/Tiktok-Download-Live.git TikTok-Download-Live
+cd TikTok-Download-Live && bash deploy/install-ubuntu.sh --quick-tunnel
+```
+
+ตอนจบจะพิมพ์ลิงก์ `https://<คำสุ่ม>.trycloudflare.com/?token=...` ให้ ที่อยู่นี้**เปลี่ยนทุกครั้งที่ VPS หรือ tunnel รีสตาร์ท** ดูลิงก์ปัจจุบันด้วย `bash deploy/show-link.sh` (ปุ่ม "มือถือ" ในหน้าเว็บก็แสดง QR ของลิงก์ปัจจุบัน) Cloudflare ไม่รับประกันความเสถียรของ Quick Tunnel ถ้าอยากได้ลิงก์ถาวรให้ใช้โดเมนของตัวเองแบบด้านล่าง (tunnel ก็ฟรีเหมือนกัน ต้องมีแค่โดเมน)
+
+**แบบใช้โดเมนของตัวเอง**
+
 **1. สร้าง tunnel ใน Cloudflare (ต้องมีโดเมนที่อยู่ใน Cloudflare)**
 <https://one.dash.cloudflare.com> → Networks → Tunnels → Create a tunnel → Cloudflared → ตั้งชื่อ → คัดลอก token (ตัวยาวที่ขึ้นต้นด้วย `eyJ`) → แท็บ Public Hostname: เช่น `rec.example.com` → Service `HTTP` `localhost:8080`
 
@@ -77,7 +89,7 @@ scp cookies.txt client_secret.json youtube_token.json ubuntu@<ที่อยู
 
 **4. ในหน้าเว็บ** อัปโหลด cookies.txt → เพิ่มช่อง → ปุ่ม YouTube → เชื่อมบัญชี (แบบวางที่อยู่) → เปิด **อัปโหลดอัตโนมัติ** แนะนำเปิด **ลบคลิปเก่าอัตโนมัติ** ด้วยเพราะดิสก์ VPS มักเล็ก
 
-คำสั่งบน VPS: `sudo systemctl status ttlive`, `sudo systemctl restart ttlive`, `journalctl -u ttlive -f` (ดู log) อัปเดตโค้ด: `git pull && sudo systemctl restart ttlive` (รอให้ไม่มีไลฟ์ที่กำลังอัดก่อน)
+คำสั่งบน VPS: `sudo systemctl status ttlive` (และ `ttlive-tunnel` ถ้าใช้ Quick Tunnel), `sudo systemctl restart ttlive`, `journalctl -u ttlive -f` (ดู log) อัปเดตโค้ด: `git pull && sudo systemctl restart ttlive` (รอให้ไม่มีไลฟ์ที่กำลังอัดก่อน)
 
 ข้อควรรู้: IP ของ VPS เป็น IP ดาต้าเซ็นเตอร์ TikTok อาจขึ้น CAPTCHA บ่อยกว่าที่บ้าน ถ้าเจอโปรแกรมจะหยุดเช็กชั่วคราวและแจ้งเตือน ให้เปิด tiktok.com ใน Chrome บนคอม ยืนยันตัวตน แล้ว export cookies.txt ใหม่มาอัปโหลด
 

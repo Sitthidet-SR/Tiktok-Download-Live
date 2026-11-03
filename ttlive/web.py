@@ -21,7 +21,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .config import update_config
+from .config import QUICK_TUNNEL, QUICK_TUNNEL_METRICS, update_config
 from .http_client import CookieError
 from .library import Janitor, delete_clip
 from .merge import merge_session
@@ -128,6 +128,8 @@ class App:
         return {"items": items, "free": disk.f_bavail * disk.f_frsize, "total": disk.f_blocks * disk.f_frsize}
 
     def base_url(self):
+        if self.cfg.public_url == QUICK_TUNNEL:
+            return quick_tunnel_url() or f"http://{lan_ip()}:{self.port}"
         return self.cfg.public_url or f"http://{lan_ip()}:{self.port}"
 
     def set_auto_upload(self, enabled):
@@ -239,7 +241,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             headers = {}
             if self.app.token:
-                secure = "; Secure" if self.app.cfg.public_url.startswith("https://") and self._proxied() else ""
+                secure = "; Secure" if self.app.cfg.public_url.startswith(("https://", QUICK_TUNNEL)) and self._proxied() else ""
                 headers["Set-Cookie"] = (f"ttlive_token={self.app.token}; Path=/; HttpOnly; SameSite=Strict; "
                                          f"Max-Age=31536000{secure}")
             return self._static("index.html", headers)
@@ -415,6 +417,23 @@ class Handler(BaseHTTPRequestHandler):
                 pass  # the browser stopped reading, which is normal for video seeking
 
 
+_quick = {"url": None, "time": 0.0}
+
+
+def quick_tunnel_url():
+    """The current https://….trycloudflare.com address; it changes whenever cloudflared restarts."""
+    if time.time() - _quick["time"] > 30:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(QUICK_TUNNEL_METRICS, timeout=2) as r:
+                host = json.load(r).get("hostname")
+            _quick["url"] = f"https://{host}" if host else None
+        except (OSError, ValueError):
+            _quick["url"] = None
+        _quick["time"] = time.time()
+    return _quick["url"]
+
+
 def lan_ip():
     """This computer's address on the home network (no packet is sent)."""
     import socket
@@ -457,7 +476,9 @@ def serve(cfg, http, api, monitor, notifier, host="127.0.0.1", port=8080, config
     shown = "localhost" if host in LOOPBACK else (lan_ip() if host in ("0.0.0.0", "::") else host)
     url = f"http://{shown}:{port}/" + (f"?token={token}" if token else "")
     log.info("web UI: %s", url)
-    if cfg.public_url:
+    if cfg.public_url == QUICK_TUNNEL:
+        log.info("public UI: the trycloudflare.com address from cloudflared, plus ?token=%s", token)
+    elif cfg.public_url:
         log.info("public UI: %s/?token=%s", cfg.public_url, token)
     if token:
         log.warning("the UI is reachable from other devices: only share this link with people you trust")

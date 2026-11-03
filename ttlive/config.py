@@ -4,6 +4,10 @@ import json
 import os
 from dataclasses import dataclass, field
 
+QUICK_TUNNEL = "trycloudflare"
+# cloudflared's metrics server, which reports the Quick Tunnel's address at /quicktunnel
+QUICK_TUNNEL_METRICS = "http://127.0.0.1:20241/quicktunnel"
+
 DEFAULT_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
@@ -47,6 +51,7 @@ class Config:
     youtube_auto_upload: bool = False
     # The address the UI is reached at through a reverse proxy or Cloudflare Tunnel,
     # e.g. "https://rec.example.com". Setting it always requires the access token.
+    # "trycloudflare": a free Cloudflare Quick Tunnel, whose random address is read from cloudflared.
     public_url: str = ""
     user_agent: str = DEFAULT_UA
     ffmpeg: str = "ffmpeg"
@@ -93,8 +98,8 @@ def load_config(path, allow_empty=False):
     if not 5 <= cfg.auto_delete_free_gb <= 10000:
         raise ValueError("auto_delete_free_gb must be between 5 and 10000")
     cfg.public_url = cfg.public_url.strip().rstrip("/")
-    if cfg.public_url and not cfg.public_url.startswith(("https://", "http://")):
-        raise ValueError("public_url must start with https://")
+    if cfg.public_url and cfg.public_url != QUICK_TUNNEL and not cfg.public_url.startswith(("https://", "http://")):
+        raise ValueError('public_url must start with https:// (or be "trycloudflare")')
     if cfg.min_request_gap < 1:
         raise ValueError("min_request_gap must be at least 1 second")
     return cfg
