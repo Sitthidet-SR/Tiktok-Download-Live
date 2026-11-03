@@ -57,12 +57,11 @@ python3 -m ttlive web --open
 
 ```bash
 ssh ubuntu@<ที่อยู่ VPS>
+sudo apt update && sudo apt install -y git
 git clone https://github.com/Sitthidet-SR/Tiktok-Download-Live.git TikTok-Download-Live
 cd TikTok-Download-Live
 bash deploy/install-ubuntu.sh --cloudflare https://rec.example.com
 ```
-
-repo นี้เป็น private: บน VPS ต้องล็อกอินก่อน clone ง่ายสุดคือ `sudo apt install gh && gh auth login` (เลือก HTTPS แล้วยืนยันผ่านเบราว์เซอร์บนคอม) หรือข้ามการ clone แล้วใช้ `deploy/push-to-vps.sh` จากคอมแทน
 
 สคริปต์จะติดตั้ง python3, ffmpeg, cloudflared สร้าง service `ttlive` (เริ่มเองตอนบูต, ใช้เวลาไทย) แล้วถาม tunnel token (พิมพ์แล้วไม่แสดงบนจอ) ตอนจบจะพิมพ์ลิงก์ `https://rec.example.com/?token=...` ให้ เปิดครั้งเดียวแล้วเบราว์เซอร์จำไว้ 1 ปี
 
