@@ -697,6 +697,7 @@ $("#btn-phone").addEventListener("click", () => {
   const url = state.lan_url;
   $("#phone-on").hidden = !url;
   $("#phone-off").hidden = !!url;
+  $("#phone-hint").textContent = state.public ? "สแกนด้วยกล้องมือถือ เปิดได้จากทุกที่ผ่านอินเทอร์เน็ต" : "ให้มือถือต่อ Wi-Fi วงเดียวกับคอมเครื่องนี้ แล้วสแกนด้วยกล้อง";
   if (url) {
     const qr = qrcode(0, "M");
     qr.addData(url);
@@ -719,11 +720,39 @@ function openYoutube() {
   $("#yt-steps").hidden = yt.configured;
   $("#yt-connect").hidden = yt.connected || !yt.configured;
   $("#yt-disconnect").hidden = !yt.connected;
+  $("#yt-paste").hidden = true;
+  $("#yt-auto-row").hidden = !yt.connected;
+  $("#yt-auto").checked = !!yt.auto_upload;
   $("#dlg-youtube").showModal();
 }
 $("#btn-youtube").addEventListener("click", openYoutube);
 $("#yt-connect").addEventListener("click", async () => {
-  try { location.href = (await api("/api/youtube/connect", {})).url; } catch (err) { toast(err.message, true); }
+  try {
+    const r = await api("/api/youtube/connect", {});
+    if (!r.paste) { location.href = r.url; return; }
+    // Not on the computer running the program: Google's redirect to 127.0.0.1 can't reach us
+    $("#yt-open").href = r.url;
+    window.open(r.url, "_blank", "noopener");
+    $("#yt-paste").hidden = false;
+    $("#yt-paste-url").focus();
+  } catch (err) { toast(err.message, true); }
+});
+$("#yt-paste").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api("/api/youtube/finish", { url: $("#yt-paste-url").value });
+    $("#yt-paste-url").value = "";
+    toast("เชื่อมบัญชี YouTube แล้ว");
+    await refreshState();
+    openYoutube();
+  } catch (err) { toast(err.message, true); }
+});
+$("#yt-auto").addEventListener("change", async (e) => {
+  try {
+    await api("/api/youtube/auto", { enabled: e.target.checked });
+    toast(e.target.checked ? "เปิดอัปโหลดอัตโนมัติแล้ว คลิปที่อัดเสร็จจากนี้จะขึ้น YouTube เอง" : "ปิดอัปโหลดอัตโนมัติแล้ว");
+    refreshState();
+  } catch (err) { toast(err.message, true); e.target.checked = !e.target.checked; }
 });
 $("#yt-disconnect").addEventListener("click", async () => {
   if (!confirm("ยกเลิกการเชื่อมบัญชี YouTube?")) return;

@@ -3,7 +3,10 @@
 Binds to 127.0.0.1 by default. When bound to another address (to open it
 from a phone on the home network), every request from another device needs
 an access token, kept in .web_token and shown as a QR code in the UI.
-Requests from this computer itself need no token.
+Requests from this computer itself need no token, unless they come through
+a reverse proxy or Cloudflare Tunnel: those arrive from 127.0.0.1 too, so
+any request carrying a proxy header is treated as remote, and with public_url
+set the token is always on.
 """
 
 import json
@@ -27,6 +30,7 @@ from .youtube import YouTube, YouTubeError
 log = logging.getLogger(__name__)
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "X-Forwarded-For", "X-Real-Ip", "Forwarded")
 
 
 class App:
@@ -89,8 +93,9 @@ class App:
                          "segment_seconds": self.cfg.segment_seconds, "output_dir": self.out_dir,
                          "auto_delete_enabled": self.cfg.auto_delete_enabled,
                          "auto_delete_free_gb": self.cfg.auto_delete_free_gb},
-            "lan_url": f"http://{lan_ip()}:{self.port}/?token={self.token}" if self.token else None,
-            "youtube": self.youtube.status(),
+            "lan_url": f"{self.base_url()}/?token={self.token}" if self.token else None,
+            "public": bool(self.cfg.public_url),
+            "youtube": {**self.youtube.status(), "auto_upload": self.cfg.youtube_auto_upload},
         }
 
     def recordings(self):
@@ -121,6 +126,36 @@ class App:
         items.sort(key=lambda i: i["time"], reverse=True)
         disk = os.statvfs(self.out_dir)
         return {"items": items, "free": disk.f_bavail * disk.f_frsize, "total": disk.f_blocks * disk.f_frsize}
+
+    def base_url(self):
+        return self.cfg.public_url or f"http://{lan_ip()}:{self.port}"
+
+    def set_auto_upload(self, enabled):
+        self.cfg.youtube_auto_upload = bool(enabled)
+        if self.config_path:
+            update_config(self.config_path, youtube_auto_upload=bool(enabled))
+
+    def clip_ready(self, username, full):
+        """Called by the Monitor after a clip is merged: upload it if auto upload is on."""
+        if not self.cfg.youtube_auto_upload:
+            return
+        rel = os.path.relpath(os.path.realpath(full), self.out_dir)
+        try:
+            if not self.youtube.connected():
+                raise YouTubeError("ยังไม่ได้เชื่อมบัญชี YouTube")
+            self.youtube.start_upload(full, rel, self.clip_title(username, full),
+                                      f"บันทึกจากไลฟ์ TikTok @{username}")
+            log.info("auto upload of %s started", rel)
+        except YouTubeError as e:
+            log.warning("auto upload of %s not started: %s", rel, e)
+            self.notifier.send(f"⚠️ อัปโหลด {os.path.basename(rel)} ขึ้น YouTube อัตโนมัติไม่ได้: {e}")
+
+    def clip_title(self, username, full):
+        nick = next((c.get("nickname") for c in self.monitor.snapshot() if c["username"] == username), "") or ""
+        m = re.search(r"_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})\d{2}", os.path.basename(full))
+        when = f"{m[3]}/{m[2]}/{m[1]} {m[4]}:{m[5]}" if m else time.strftime("%d/%m/%Y %H:%M")
+        who = f"{nick} (@{username})" if nick and nick != username else f"@{username}"
+        return f"{who} ไลฟ์ {when}"
 
     def safe_path(self, rel):
         """Resolve a path under the output folder, refusing anything outside it."""
@@ -158,12 +193,18 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, code, msg):
         self._json({"error": msg}, code)
 
+    def _proxied(self):
+        return any(h in self.headers for h in PROXY_HEADERS)
+
     def _local(self):
-        return self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+        return self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1") and not self._proxied()
 
     def _authorized(self):
         token = self.app.token
-        if not token or self._local():
+        if not token:
+            # Bound to localhost with no token: refuse anything a proxy forwarded from outside
+            return not self._proxied()
+        if self._local():
             return True
         q = parse_qs(urlparse(self.path).query).get("token", [""])[0]
         if secrets.compare_digest(q, token):
@@ -191,13 +232,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlparse(self.path)
         if not self._authorized():
-            return self._send(401, "ต้องเปิดด้วยลิงก์ที่มี token ที่แสดงตอนเริ่มโปรแกรม".encode(),
+            return self._send(401, ("ต้องเปิดด้วยลิงก์ที่มี token ที่แสดงตอนเริ่มโปรแกรม" if self.app.token else
+                                    "เข้าผ่าน proxy/tunnel ได้เมื่อตั้ง public_url หรือ --public-url แล้วเท่านั้น").encode(),
                               "text/plain; charset=utf-8")
         path = url.path
         if path in ("/", "/index.html"):
             headers = {}
             if self.app.token:
-                headers["Set-Cookie"] = f"ttlive_token={self.app.token}; Path=/; HttpOnly; SameSite=Strict"
+                secure = "; Secure" if self.app.cfg.public_url.startswith("https://") and self._proxied() else ""
+                headers["Set-Cookie"] = (f"ttlive_token={self.app.token}; Path=/; HttpOnly; SameSite=Strict; "
+                                         f"Max-Age=31536000{secure}")
             return self._static("index.html", headers)
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
@@ -268,10 +312,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.app.set_auto_delete(body.get("enabled"), body.get("free_gb", self.app.cfg.auto_delete_free_gb))
                 return self._json({"ok": True})
             if path == "/api/youtube/connect":
-                if not self._local():
-                    return self._error(400, "ต้องกดเชื่อมบัญชี YouTube จากคอมเครื่องที่รันโปรแกรม (ไม่ใช่จากมือถือ)")
+                # Google always sends the browser back to 127.0.0.1. On this computer that reaches
+                # the UI; anywhere else the page fails to load and the user pastes its address back.
                 url = self.app.youtube.auth_url(f"http://127.0.0.1:{self.app.port}/oauth/youtube")
-                return self._json({"ok": True, "url": url})
+                return self._json({"ok": True, "url": url, "paste": not self._local()})
+            if path == "/api/youtube/finish":
+                self.app.youtube.finish_url(str(body.get("url", "")))
+                return self._json({"ok": True})
+            if path == "/api/youtube/auto":
+                self.app.set_auto_upload(body.get("enabled"))
+                return self._json({"ok": True})
             if path == "/api/youtube/disconnect":
                 self.app.youtube.disconnect()
                 return self._json({"ok": True})
@@ -395,7 +445,8 @@ def load_token(path):
 
 
 def serve(cfg, http, api, monitor, notifier, host="127.0.0.1", port=8080, config_path=None):
-    token = None if host in LOOPBACK else load_token(cfg.path(".web_token"))
+    need_token = host not in LOOPBACK or cfg.public_url
+    token = load_token(cfg.path(".web_token")) if need_token else None
     app = App(cfg, http, api, monitor, notifier, token, config_path, port)
     app.refresh_account()
     app.watch_account()
@@ -406,6 +457,8 @@ def serve(cfg, http, api, monitor, notifier, host="127.0.0.1", port=8080, config
     shown = "localhost" if host in LOOPBACK else (lan_ip() if host in ("0.0.0.0", "::") else host)
     url = f"http://{shown}:{port}/" + (f"?token={token}" if token else "")
     log.info("web UI: %s", url)
+    if cfg.public_url:
+        log.info("public UI: %s/?token=%s", cfg.public_url, token)
     if token:
         log.warning("the UI is reachable from other devices: only share this link with people you trust")
     return server, url

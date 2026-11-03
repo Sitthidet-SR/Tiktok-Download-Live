@@ -34,9 +34,10 @@ class ChannelState:
 
 
 class Monitor:
-    def __init__(self, cfg, http, api, notifier, on_channels_changed=None):
+    def __init__(self, cfg, http, api, notifier, on_channels_changed=None, on_clip_ready=None):
         self.cfg, self.http, self.api, self.notifier = cfg, http, api, notifier
         self.on_channels_changed = on_channels_changed
+        self.on_clip_ready = on_clip_ready  # (username, mp4 path) after a clip is merged
         self.recorders = {}
         self.channels = {}
         self.lock = threading.RLock()
@@ -230,6 +231,7 @@ class Monitor:
         rec.start()
 
     def _reap(self):
+        done = []
         with self.lock:
             for u, r in list(self.recorders.items()):
                 if not r.is_alive():
@@ -238,6 +240,14 @@ class Monitor:
                     if st:
                         st.status = "offline"
                         st.next_check = time.time() + RECHECK_AFTER_END
+                    if r.output:
+                        done.append((u, r.output))
+        for u, out in done:
+            if self.on_clip_ready:
+                try:
+                    self.on_clip_ready(u, out)
+                except Exception:
+                    log.exception("[%s] clip-ready hook failed", u)
 
     def _check_disk(self):
         if time.time() - self._disk_checked < 60:

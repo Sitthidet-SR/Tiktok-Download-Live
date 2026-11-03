@@ -36,12 +36,51 @@ python3 -m ttlive web --open
 
 1. เปิด https://console.cloud.google.com/projectcreate สร้างโปรเจกต์ใหม่ (ฟรี)
 2. เปิดใช้ **YouTube Data API v3** ที่ https://console.cloud.google.com/apis/library/youtube.googleapis.com
-3. ตั้ง **OAuth consent screen** (https://console.cloud.google.com/auth/overview) แบบ **External** แล้วเพิ่มอีเมลตัวเองใน **Test users** (ไม่ต้องส่งให้ Google ตรวจ)
+3. ตั้ง **OAuth consent screen** (https://console.cloud.google.com/auth/overview) แบบ **External** แล้วไปที่ **Audience** กด **Publish app** (ไม่ต้องส่งให้ Google ตรวจ ถ้าค้างเป็น Testing สิทธิ์จะหมดทุก 7 วันและอัปโหลดอัตโนมัติจะหยุด)
 4. ที่ https://console.cloud.google.com/auth/clients กด Create client เลือกชนิด **Desktop app** แล้วดาวน์โหลดไฟล์ JSON
 5. ย้ายไฟล์นั้นมาไว้ในโฟลเดอร์โปรแกรม ตั้งชื่อ `client_secret.json`
-6. ในหน้าเว็บ (บนคอมเครื่องนี้) กดปุ่ม **YouTube** → **เชื่อมบัญชี Google** แล้วอนุญาต (Google จะเตือนว่าแอปยังไม่ผ่านการตรวจ ให้กด Continue เพราะเป็นแอปของคุณเอง)
+6. ในหน้าเว็บกดปุ่ม **YouTube** → **เชื่อมบัญชี Google** แล้วอนุญาต (Google จะเตือนว่าแอปยังไม่ผ่านการตรวจ ให้กด Advanced → Continue เพราะเป็นแอปของคุณเอง)
+   - เปิดหน้าเว็บจากเครื่องที่รันโปรแกรม: กลับมาหน้าเว็บเอง
+   - เปิดจากที่อื่น (มือถือ, ผ่าน Cloudflare Tunnel): หลังอนุญาต เบราว์เซอร์จะไปหน้า `http://127.0.0.1:8080/oauth/youtube?...` ที่เปิดไม่ขึ้น เป็นเรื่องปกติ ให้คัดลอกที่อยู่ทั้งบรรทัดมาวางในช่องที่หน้าเว็บแสดง
+   - หรือใช้คำสั่งในเทอร์มินัล: `python3 -m ttlive youtube-login` (ทำแบบเดียวกัน วางที่อยู่ในเทอร์มินัล)
 
-จากนั้นกดไอคอน YouTube บนคลิปเพื่ออัปโหลด คลิปจะเป็น **Private** เสมอ ขอสิทธิ์แค่ `youtube.upload` โควตาฟรีอัปได้ราว 6 คลิปต่อวัน ถ้าแอปอยู่ในสถานะ Testing สิทธิ์จะหมดอายุทุก 7 วัน ให้กดเชื่อมใหม่ (หรือกด Publish app ในหน้า consent screen เพื่อไม่ให้หมดอายุ)
+จากนั้นกดไอคอน YouTube บนคลิปเพื่ออัปโหลด หรือเปิดสวิตช์ **อัปโหลดอัตโนมัติทุกคลิปที่อัดเสร็จ** ในหน้าต่าง YouTube (`youtube_auto_upload` ใน config) คลิปจะเป็น **Private** เสมอ อัปทีละคลิปตามลำดับ ขอสิทธิ์แค่ `youtube.upload` โควตาฟรีอัปได้ราว 6 คลิปต่อวัน ถ้าอัปไม่สำเร็จจะแจ้งเตือนและกดอัปใหม่ได้จากคลิปนั้น
+
+## รันบน VPS (Ubuntu Server) + Cloudflare Tunnel
+
+บน VPS ไม่มี Chrome จึงใช้ `cookies.txt` ที่อัปโหลดผ่านหน้าเว็บ (ล็อกอิน TikTok ใน Chrome บนคอม แล้ว export ด้วยส่วนขยาย "Get cookies.txt LOCALLY") หน้าเว็บฟังแค่ `127.0.0.1:8080` ไม่เปิดพอร์ตออกเน็ต เข้าจากข้างนอกผ่าน Cloudflare Tunnel และต้องมี token เสมอ (คำขอที่มาทาง tunnel/proxy จะไม่ถูกนับว่าเป็น "เครื่องตัวเอง")
+
+**1. สร้าง tunnel ใน Cloudflare (ต้องมีโดเมนที่อยู่ใน Cloudflare)**
+<https://one.dash.cloudflare.com> → Networks → Tunnels → Create a tunnel → Cloudflared → ตั้งชื่อ → คัดลอก token (ตัวยาวที่ขึ้นต้นด้วย `eyJ`) → แท็บ Public Hostname: เช่น `rec.example.com` → Service `HTTP` `localhost:8080`
+
+**2. เอาโค้ดขึ้น VPS แล้วติดตั้ง**
+
+```bash
+ssh ubuntu@<ที่อยู่ VPS>
+git clone https://github.com/Sitthidet-SR/Tiktok-Download-Live.git TikTok-Download-Live
+cd TikTok-Download-Live
+bash deploy/install-ubuntu.sh --cloudflare https://rec.example.com
+```
+
+repo นี้เป็น private: บน VPS ต้องล็อกอินก่อน clone ง่ายสุดคือ `sudo apt install gh && gh auth login` (เลือก HTTPS แล้วยืนยันผ่านเบราว์เซอร์บนคอม) หรือข้ามการ clone แล้วใช้ `deploy/push-to-vps.sh` จากคอมแทน
+
+สคริปต์จะติดตั้ง python3, ffmpeg, cloudflared สร้าง service `ttlive` (เริ่มเองตอนบูต, ใช้เวลาไทย) แล้วถาม tunnel token (พิมพ์แล้วไม่แสดงบนจอ) ตอนจบจะพิมพ์ลิงก์ `https://rec.example.com/?token=...` ให้ เปิดครั้งเดียวแล้วเบราว์เซอร์จำไว้ 1 ปี
+
+ถ้าไม่ใช้ Cloudflare รันแค่ `bash deploy/install-ubuntu.sh` แล้วเข้าหน้าเว็บผ่าน SSH tunnel: `ssh -L 8080:127.0.0.1:8080 ubuntu@<ที่อยู่ VPS>` แล้วเปิด <http://localhost:8080>
+
+**3. ย้ายไฟล์ลับจากคอม (ถ้ามี)** ไฟล์เหล่านี้ไม่อยู่ใน git: `cookies.txt`, `client_secret.json`, `youtube_token.json`, `config.json`
+
+```bash
+scp cookies.txt client_secret.json youtube_token.json ubuntu@<ที่อยู่ VPS>:TikTok-Download-Live/
+```
+
+หรือ `bash deploy/push-to-vps.sh ubuntu@<ที่อยู่ VPS>` เพื่อคัดลอกทั้งโฟลเดอร์ (ยกเว้นคลิปและ log) แล้วรัน install ซ้ำ ไม่มีก็ได้: อัปโหลด cookie และเชื่อม YouTube จากหน้าเว็บ
+
+**4. ในหน้าเว็บ** อัปโหลด cookies.txt → เพิ่มช่อง → ปุ่ม YouTube → เชื่อมบัญชี (แบบวางที่อยู่) → เปิด **อัปโหลดอัตโนมัติ** แนะนำเปิด **ลบคลิปเก่าอัตโนมัติ** ด้วยเพราะดิสก์ VPS มักเล็ก
+
+คำสั่งบน VPS: `sudo systemctl status ttlive`, `sudo systemctl restart ttlive`, `journalctl -u ttlive -f` (ดู log) อัปเดตโค้ด: `git pull && sudo systemctl restart ttlive` (รอให้ไม่มีไลฟ์ที่กำลังอัดก่อน)
+
+ข้อควรรู้: IP ของ VPS เป็น IP ดาต้าเซ็นเตอร์ TikTok อาจขึ้น CAPTCHA บ่อยกว่าที่บ้าน ถ้าเจอโปรแกรมจะหยุดเช็กชั่วคราวและแจ้งเตือน ให้เปิด tiktok.com ใน Chrome บนคอม ยืนยันตัวตน แล้ว export cookies.txt ใหม่มาอัปโหลด
 
 ## เปิดเองหลังรีสตาร์ทเครื่อง
 

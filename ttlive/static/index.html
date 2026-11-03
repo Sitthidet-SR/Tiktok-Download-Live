@@ -163,7 +163,7 @@
     </div>
     <div id="phone-on">
       <div class="qr" id="qr"></div>
-      <p class="hint center">ให้มือถือต่อ Wi-Fi วงเดียวกับคอมเครื่องนี้ แล้วสแกนด้วยกล้อง</p>
+      <p class="hint center" id="phone-hint">ให้มือถือต่อ Wi-Fi วงเดียวกับคอมเครื่องนี้ แล้วสแกนด้วยกล้อง</p>
       <div class="url-row"><code id="phone-url"></code><button class="btn btn-sm" id="phone-copy">คัดลอก</button></div>
       <p class="hint">ลิงก์นี้มีรหัสผ่านในตัว ใครได้ไปก็เปิดหน้านี้ได้ อย่าส่งให้คนอื่น</p>
     </div>
@@ -183,11 +183,16 @@
     <ol class="steps" id="yt-steps">
       <li>เปิด <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> แล้วสร้างโปรเจกต์ใหม่ (ฟรี)</li>
       <li>เปิดใช้ <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer">YouTube Data API v3</a></li>
-      <li>ตั้งค่า <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener noreferrer">OAuth consent screen</a> แบบ <b>External</b> แล้วเพิ่มอีเมลตัวเองใน <b>Test users</b></li>
+      <li>ตั้งค่า <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener noreferrer">OAuth consent screen</a> แบบ <b>External</b> แล้วไปที่ <a href="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Audience</a> กด <b>Publish app</b> (ถ้าค้างเป็น Testing สิทธิ์จะหมดทุก 7 วัน)</li>
       <li>ไปที่ <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Clients</a> → Create client → ชนิด <b>Desktop app</b> → ดาวน์โหลด JSON</li>
       <li>ย้ายไฟล์ที่ได้ไปไว้ในโฟลเดอร์โปรแกรมชื่อ <code>client_secret.json</code> แล้วเปิดหน้าต่างนี้ใหม่</li>
     </ol>
-    <p class="hint">คลิปจะขึ้นเป็น <b>ส่วนตัว (Private)</b> เสมอ เห็นเฉพาะคุณ โควตาฟรีของ Google อัปได้ประมาณ 6 คลิปต่อวัน การเชื่อมบัญชีต้องกดจากคอมเครื่องนี้</p>
+    <form id="yt-paste" class="field" hidden>
+      <span><a id="yt-open" href="#" target="_blank" rel="noopener noreferrer">เปิดหน้า Google</a> (ถ้ายังไม่เปิดเอง) หลังกดอนุญาต เบราว์เซอร์จะไปหน้า <code>http://127.0.0.1/…</code> ที่เปิดไม่ขึ้น (ปกติ) ให้คัดลอกที่อยู่ทั้งบรรทัดมาวางที่นี่</span>
+      <span class="field-row"><input id="yt-paste-url" placeholder="http://127.0.0.1:8080/oauth/youtube?state=…&code=…" spellcheck="false" autocapitalize="off"><button class="btn btn-sm btn-primary">ยืนยัน</button></span>
+    </form>
+    <label class="switch" id="yt-auto-row" hidden><input type="checkbox" id="yt-auto"><i></i><span>อัปโหลดอัตโนมัติทุกคลิปที่อัดเสร็จ</span></label>
+    <p class="hint">คลิปจะขึ้นเป็น <b>ส่วนตัว (Private)</b> เสมอ เห็นเฉพาะคุณ โควตาฟรีของ Google อัปได้ประมาณ 6 คลิปต่อวัน อัปทีละคลิปตามลำดับ</p>
     <div class="dialog-actions">
       <button class="btn btn-ghost" id="yt-disconnect" hidden>ยกเลิกการเชื่อม</button>
       <button class="btn btn-primary" id="yt-connect" hidden>เชื่อมบัญชี Google</button>

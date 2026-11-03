@@ -43,6 +43,11 @@ class Config:
     # Delete the oldest merged clips when free disk space drops below this many GB (set from the web UI)
     auto_delete_enabled: bool = False
     auto_delete_free_gb: float = 50
+    # Upload every newly merged clip to YouTube as a private video (set from the web UI)
+    youtube_auto_upload: bool = False
+    # The address the UI is reached at through a reverse proxy or Cloudflare Tunnel,
+    # e.g. "https://rec.example.com". Setting it always requires the access token.
+    public_url: str = ""
     user_agent: str = DEFAULT_UA
     ffmpeg: str = "ffmpeg"
     discord_webhook_url: str = ""
@@ -87,6 +92,9 @@ def load_config(path, allow_empty=False):
         raise ValueError("stats_interval must be at least 30 seconds")
     if not 5 <= cfg.auto_delete_free_gb <= 10000:
         raise ValueError("auto_delete_free_gb must be between 5 and 10000")
+    cfg.public_url = cfg.public_url.strip().rstrip("/")
+    if cfg.public_url and not cfg.public_url.startswith(("https://", "http://")):
+        raise ValueError("public_url must start with https://")
     if cfg.min_request_gap < 1:
         raise ValueError("min_request_gap must be at least 1 second")
     return cfg

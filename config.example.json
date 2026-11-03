@@ -29,6 +29,8 @@
   "captcha_pause_minutes": 30,
   "auto_delete_enabled": false,
   "auto_delete_free_gb": 50,
+  "youtube_auto_upload": false,
+  "public_url": "",
   "discord_webhook_url": "",
   "line_channel_token": "",
   "line_to": "",

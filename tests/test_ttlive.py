@@ -422,6 +422,48 @@ class WebTests(Base):
             handler.app.token = None
             del handler._local
 
+    def test_tunnel_requests_are_never_local(self):
+        cf = {"Cf-Connecting-Ip": "203.0.113.9"}
+        # No token (bound to localhost): a tunnelled request is refused outright
+        self.assertEqual(self.call("/api/state", headers=cf)[0], 401)
+        handler = self.server.RequestHandlerClass
+        handler.app.token = "secret"
+        try:
+            self.assertEqual(self.call("/api/state", headers=cf)[0], 401)
+            self.assertEqual(self.call("/api/state?token=secret", headers=cf)[0], 200)
+            self.assertEqual(self.call("/api/state")[0], 200)  # plain localhost still works
+        finally:
+            handler.app.token = None
+
+    def test_youtube_paste_and_auto_upload(self):
+        app = self.server.RequestHandlerClass.app
+        with open(os.path.join(self.tmp, "client_secret.json"), "w") as f:
+            json.dump({"installed": {"client_id": "id", "client_secret": "s"}}, f)
+        app.token = "secret"
+        try:
+            r = json.loads(self.call("/api/youtube/connect?token=secret", {}, headers={"X-Forwarded-For": "1.2.3.4"})[1])
+        finally:
+            app.token = None
+        self.assertTrue(r["paste"])
+        self.assertIn("redirect_uri=http%3A%2F%2F127.0.0.1", r["url"])
+        code, body = self.call("/api/youtube/finish", {"url": "http://127.0.0.1:8080/oauth/youtube?x=1"})
+        self.assertEqual(code, 400)
+        got = {}
+        app.youtube.finish = lambda code, state: got.update(code=code, state=state)
+        self.assertEqual(self.call("/api/youtube/finish", {"url": "http://127.0.0.1:8080/oauth/youtube?state=S&code=C"})[0], 200)
+        self.assertEqual(got, {"code": "C", "state": "S"})
+
+        self.assertEqual(self.call("/api/youtube/auto", {"enabled": True})[0], 200)
+        self.assertTrue(json.loads(self.call("/api/state")[1])["youtube"]["auto_upload"])
+        started = []
+        app.youtube.connected = lambda: True
+        app.youtube.start_upload = lambda full, rel, title, desc: started.append((rel, title))
+        app.clip_ready("alice", os.path.join(app.out_dir, "alice", "alice_20261103_201500.mp4"))
+        self.assertEqual(started, [("alice/alice_20261103_201500.mp4", "@alice ไลฟ์ 03/11/2026 20:15")])
+        app.set_auto_upload(False)
+        app.clip_ready("alice", os.path.join(app.out_dir, "alice", "a.mp4"))
+        self.assertEqual(len(started), 1)
+
     def test_delete_clip_and_auto_delete_setting(self):
         self.assertEqual(self.call("/api/delete", {"path": "../cookies.txt"})[0], 403)
         self.assertEqual(self.call("/api/delete", {"path": "alice/nope.mp4"})[0], 404)

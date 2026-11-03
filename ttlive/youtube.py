@@ -3,6 +3,9 @@
 Uses the official YouTube Data API v3 with the user's own Google Cloud OAuth
 client (client_secret.json, type "Desktop app"). Sign-in happens once in the
 browser; the refresh token is kept in youtube_token.json (mode 0600).
+On a server with no browser, Google redirects to http://127.0.0.1/... which
+fails to load on the user's own computer; the user pastes that address back
+(finish_url) and the code in it is exchanged the same way.
 Only the youtube.upload scope is requested.
 """
 
@@ -16,7 +19,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +64,7 @@ class YouTube:
         self.jobs = {}  # rel path -> {"state", "progress", "error"}
         self._pending = {}  # oauth state -> (verifier, redirect_uri, time)
         self._lock = threading.Lock()
+        self._slot = threading.Semaphore(1)  # one upload at a time, so a small server's uplink isn't split
         self._token = None
 
     # ---- files ------------------------------------------------------
@@ -141,6 +145,15 @@ class YouTube:
         self._token = (tok["access_token"], time.time() + int(tok.get("expires_in", 3600)) - 60)
         log.info("connected to YouTube")
 
+    def finish_url(self, pasted):
+        """Finish sign-in from the address Google redirected to, pasted by the user."""
+        q = parse_qs(urlparse(pasted.strip()).query)
+        if "error" in q:
+            raise YouTubeError("ยกเลิกการเชื่อม YouTube" if q["error"][0] == "access_denied" else "Google: " + q["error"][0])
+        if "code" not in q or "state" not in q:
+            raise YouTubeError("ลิงก์ไม่ครบ ให้คัดลอกที่อยู่ทั้งบรรทัดจากแถบที่อยู่ของเบราว์เซอร์ (ขึ้นต้นด้วย http://127.0.0.1)")
+        self.finish(q["code"][0], q["state"][0])
+
     def disconnect(self):
         if self.connected():
             os.remove(self.token_file)
@@ -186,7 +199,8 @@ class YouTube:
 
     def _upload(self, full, rel, title, description):
         try:
-            video_id = self._resumable_upload(full, rel, title, description)
+            with self._slot:
+                video_id = self._resumable_upload(full, rel, title, description)
         except Exception as e:  # shown in the UI
             log.warning("YouTube upload of %s failed: %s", rel, e)
             self._set(rel, state="error", error=str(e))

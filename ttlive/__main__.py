@@ -21,7 +21,7 @@ log = logging.getLogger("ttlive")
 def setup(args, allow_empty=False):
     cfg = load_config(args.config, allow_empty)
     if not shutil.which(cfg.ffmpeg):
-        sys.exit(f"ffmpeg not found ({cfg.ffmpeg}). Install it: sudo dnf install ffmpeg")
+        sys.exit(f"ffmpeg not found ({cfg.ffmpeg}). Install it: sudo apt install ffmpeg (or dnf)")
     if cfg.cookies_from_browser:
         # Start from Chrome's current cookies; CookieSync keeps them fresh afterwards
         from .browser_cookies import BrowserCookieError, read_tiktok_cookies
@@ -111,11 +111,14 @@ def cmd_web(args):
         save_new_config(args.config)
         log.info("created %s; add channels in the web UI", args.config)
     cfg, http, api = setup(args, allow_empty=True)
+    if args.public_url:
+        cfg.public_url = args.public_url.strip().rstrip("/")
     notifier = Notifier(cfg)
     monitor = Monitor(cfg, http, api, notifier,
                       on_channels_changed=lambda names, paused: save_channels(args.config, names, paused))
     server, url = serve(cfg, http, api, monitor, notifier, args.host, args.port, args.config)
     app = server.RequestHandlerClass.app
+    monitor.on_clip_ready = app.clip_ready
     app.cookie_sync = start_cookie_sync(
         cfg, http, notifier,
         # a fresh login in Chrome should show up in the UI without waiting 6 hours
@@ -135,6 +138,29 @@ def cmd_web(args):
         monitor.stop()
         for r in list(monitor.recorders.values()):
             r.join(timeout=120)
+
+
+def cmd_youtube_login(args):
+    """Connect YouTube from a terminal, for a server with no browser."""
+    from .youtube import YouTube, YouTubeError
+    cfg = load_config(args.config, allow_empty=True)
+    yt = YouTube(os.path.realpath(cfg.path(".")), None)
+    try:
+        url = yt.auth_url(f"http://127.0.0.1:{args.port}/oauth/youtube")
+    except YouTubeError as e:
+        log.error("%s", e)
+        return 1
+    print("1) เปิดลิงก์นี้ในเบราว์เซอร์บนคอมหรือมือถือ แล้วล็อกอิน Google ช่องที่จะอัปโหลด:\n")
+    print(url + "\n")
+    print("2) กดอนุญาตจนจบ เบราว์เซอร์จะไปหน้า http://127.0.0.1/... ที่เปิดไม่ขึ้น (ปกติ)")
+    print("3) คัดลอกที่อยู่ทั้งบรรทัดจากแถบที่อยู่ แล้ววางที่นี่ กด Enter\n")
+    try:
+        yt.finish_url(input("ที่อยู่: "))
+    except (YouTubeError, OSError) as e:
+        log.error("%s", e)
+        return 1
+    print("\nเชื่อมบัญชี YouTube แล้ว (เก็บไว้ใน youtube_token.json) โปรแกรมที่รันอยู่จะใช้ได้ทันที")
+    return 0
 
 
 def cmd_check(args):
@@ -185,7 +211,14 @@ def main(argv=None):
                    help="address to listen on (0.0.0.0 = reachable from your phone on the home network)")
     w.add_argument("--port", type=int, default=8080)
     w.add_argument("--open", action="store_true", help="open the UI in your browser")
+    w.add_argument("--public-url", default="",
+                   help="address the UI is reached at through a Cloudflare Tunnel or reverse proxy "
+                        "(always requires the access token)")
     w.set_defaults(func=cmd_web)
+
+    y = sub.add_parser("youtube-login", help="connect your YouTube channel from a terminal (for a server)")
+    y.add_argument("--port", type=int, default=8080, help="port in the redirect address (nothing needs to listen)")
+    y.set_defaults(func=cmd_youtube_login)
 
     c = sub.add_parser("check", help="check cookies and live status once, then exit")
     c.add_argument("users", nargs="*", help="usernames (default: channels from config)")
